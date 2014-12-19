@@ -1,0 +1,3 @@
+[submodule "ext/tickit-dylan"]
+	path = ext/tickit-dylan
+	url = https://github.com/dylan-foundry/tickit-dylan.git
