@@ -14,11 +14,11 @@ define method initialize (window :: <deuce-terminal-window>, #key)
   let (window-height, window-width) = window-size(window);
   let status-bar-origin = window-height - 2;
   read-only-label(window) := make(<label>, text: "???",
-                                  origin: make-point(window-width - 3, status-bar-origin),
-                                  size: make-point(3, 1));
+                                  origin: make-position(status-bar-origin, window-width - 3),
+                                  size: make-position(1, 3));
   buffer-name-label(window) := make(<label>, text: "No buffer loaded.",
-                                    origin: make-point(0, status-bar-origin),
-                                    size: make-point(50, 1));
+                                    origin: make-position(status-bar-origin, 0),
+                                    size: make-position(1, 50));
   renderbuffer(window) := tickit-renderbuffer-new(window-height, window-width);
 end method initialize;
 

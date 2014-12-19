@@ -7,9 +7,9 @@ define open class <widget> (<object>)
     init-keyword: parent:;
   constant slot widget-children :: <stretchy-vector> = make(<stretchy-vector>),
     init-keyword: children:;
-  slot widget-origin :: <point> = make(<point>, x: 0, y: 0),
+  slot widget-origin :: <position> = make(<position>, line: 0, col: 0),
     init-keyword: origin:;
-  slot widget-size :: <point> = make(<point>, x: 0, y: 0),
+  slot widget-size :: <position> = make(<position>, line: 0, col: 0),
     init-keyword: size:;
 end class <widget>;
 

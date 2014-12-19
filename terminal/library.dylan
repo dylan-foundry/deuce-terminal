@@ -29,4 +29,21 @@ define module terminal
   export terminal-move-cursor,
          terminal-show-cursor,
          terminal-hide-cursor;
+
+  export <position>,
+         make-position,
+         position-position,
+         position-line,
+         position-col;
+
+  export <rectangle>,
+         make-rectangle,
+         rectangle-min-position,
+         rectangle-max-position,
+         rectangle-width,
+         rectangle-height,
+         rectangle-size;
+
+  export region-contains-position?,
+         region-contains-region?;
 end module;

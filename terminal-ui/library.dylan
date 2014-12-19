@@ -23,23 +23,6 @@ define module terminal-ui
 
   export terminal-ui-dispatch-events;
 
-  export <point>,
-         make-point,
-         point-position,
-         point-x,
-         point-y;
-
-  export <rectangle>,
-         make-rectangle,
-         rectangle-min-position,
-         rectangle-max-position,
-         rectangle-width,
-         rectangle-height,
-         rectangle-size;
-
-  export region-contains-position?,
-         region-contains-region?;
-
   export <label>,
          label-text,
          label-text-setter,
