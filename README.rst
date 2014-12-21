@@ -84,8 +84,9 @@ initialized and updated the submodules. (Without doing this, the
 The sources for Deuce itself are part of the standard Open Dylan
 distribution.
 
-To build ``deuce-terminal``, you will need to install both `libtermkey`_
-and `libtickit`_.
+For now, customized versions of `libtermkey`_ and `libtickit`_ have
+been included within ``deuce-terminal``, so you won't have to install
+these on your own.
 
 Once that is done, building ``deuce-terminal`` should be as easy
 as running ``make``. The resulting binary will be ``_build/bin/dt``.
