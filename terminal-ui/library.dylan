@@ -7,7 +7,6 @@ define library terminal-ui
   use common-dylan;
   use c-ffi;
   use io;
-  use tickit;
   use terminal;
 
   export terminal-ui;

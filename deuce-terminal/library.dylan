@@ -9,7 +9,6 @@ define library deuce-terminal
   use deuce;
   use terminal;
   use terminal-ui;
-  use tickit;
 
   export deuce-terminal;
 end library;

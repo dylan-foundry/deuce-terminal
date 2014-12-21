@@ -1,0 +1,789 @@
+/* We need C99 vsnprintf() semantics */
+#define _ISOC99_SOURCE
+
+/* We need strdup and va_copy */
+#define _XOPEN_SOURCE 600
+
+#include "tickit.h"
+
+#include "hooklists.h"
+#include "termdriver.h"
+
+#include "xterm-palette.inc"
+
+#include <errno.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#include <sys/ioctl.h>
+#include <sys/select.h>
+#include <sys/time.h>
+
+/* unit multipliers for working in microseconds */
+#define MSEC      1000
+#define SECOND 1000000
+
+#include "termkey.h"
+
+static TickitTermDriverProbe *driver_probes[] = {
+  &tickit_termdrv_probe_xterm,
+  &tickit_termdrv_probe_ti,
+  NULL,
+};
+
+struct TickitTerm {
+  int                   outfd;
+  TickitTermOutputFunc *outfunc;
+  void                 *outfunc_user;
+
+  int                   infd;
+  TermKey              *termkey;
+  struct timeval        input_timeout_at; /* absolute time */
+
+  const char *termtype;
+  TickitMaybeBool is_utf8;
+
+  char *outbuffer;
+  size_t outbuffer_len; /* size of outbuffer */
+  size_t outbuffer_cur; /* current fill level */
+
+  char *tmpbuffer;
+  size_t tmpbuffer_len;
+
+  TickitTermDriver *driver;
+
+  int lines;
+  int cols;
+
+  enum { UNSTARTED, STARTING, STARTED } state;
+
+  int colors;
+  TickitPen *pen;
+
+  struct TickitEventHook *hooks;
+};
+
+DEFINE_HOOKLIST_FUNCS(term,TickitTerm,TickitTermEventFn)
+
+static TermKey *get_termkey(TickitTerm *tt)
+{
+  if(!tt->termkey) {
+    int flags = 0;
+    if(tt->is_utf8 == TICKIT_YES)
+      flags |= TERMKEY_FLAG_UTF8;
+    else if(tt->is_utf8 == TICKIT_NO)
+      flags |= TERMKEY_FLAG_RAW;
+
+    tt->termkey = termkey_new(tt->infd, TERMKEY_FLAG_EINTR | flags);
+
+    tt->is_utf8 = !!(termkey_get_flags(tt->termkey) & TERMKEY_FLAG_UTF8);
+  }
+
+  termkey_set_canonflags(tt->termkey,
+      termkey_get_canonflags(tt->termkey) | TERMKEY_CANON_DELBS);
+
+  return tt->termkey;
+}
+
+TickitTerm *tickit_term_new(void)
+{
+  const char *termtype = getenv("TERM");
+  if(!termtype)
+    termtype = "xterm";
+
+  return tickit_term_new_for_termtype(termtype);
+}
+
+void tickit_term_free(TickitTerm *tt);
+
+TickitTerm *tickit_term_new_for_termtype(const char *termtype)
+{
+  for(int i = 0; driver_probes[i]; i++) {
+    TickitTermDriver *driver = (*driver_probes[i]->new)(termtype);
+    if(!driver)
+      continue;
+
+    TickitTerm *tt = tickit_term_new_for_driver(driver);
+
+    if(tt)
+      tt->termtype = strdup(termtype);
+
+    return tt;
+  }
+
+  errno = ENOENT;
+  return NULL;
+}
+
+TickitTerm *tickit_term_new_for_driver(TickitTermDriver *ttd)
+{
+  TickitTerm *tt = malloc(sizeof(TickitTerm));
+  if(!tt)
+    return NULL;
+
+  tt->outfd   = -1;
+  tt->outfunc = NULL;
+
+  tt->infd    = -1;
+  tt->termkey = NULL;
+  tt->input_timeout_at.tv_sec = -1;
+
+  tt->outbuffer = NULL;
+  tt->outbuffer_len = 0;
+  tt->outbuffer_cur = 0;
+
+  tt->tmpbuffer = NULL;
+  tt->tmpbuffer_len = 0;
+
+  tt->is_utf8 = TICKIT_MAYBE;
+
+  /* Initially; the driver may provide a more accurate value */
+  tt->lines = 25;
+  tt->cols  = 80;
+
+  tt->hooks = NULL;
+
+  /* Initially empty because we don't necessarily know the initial state
+   * of the terminal
+   */
+  tt->pen = tickit_pen_new();
+
+  tt->termtype = NULL;
+
+  tt->driver = ttd;
+  tt->driver->tt = tt;
+
+  if(tt->driver->vtable->attach)
+    (*tt->driver->vtable->attach)(tt->driver, tt);
+
+  tickit_term_getctl_int(tt, TICKIT_TERMCTL_COLORS, &tt->colors);
+
+  // Can't 'start' yet until we have an output method
+  tt->state = UNSTARTED;
+
+  return tt;
+}
+
+void tickit_term_free(TickitTerm *tt)
+{
+  tickit_hooklist_unbind_and_destroy(tt->hooks, tt);
+  tickit_pen_destroy(tt->pen);
+
+  if(tt->driver) {
+    if(tt->driver->vtable->stop)
+      (*tt->driver->vtable->stop)(tt->driver);
+
+    (*tt->driver->vtable->destroy)(tt->driver);
+  }
+
+  if(tt->termkey)
+    termkey_destroy(tt->termkey);
+
+  if(tt->outbuffer)
+    free(tt->outbuffer);
+
+  if(tt->tmpbuffer)
+    free(tt->tmpbuffer);
+
+  free(tt);
+}
+
+void tickit_term_destroy(TickitTerm *tt)
+{
+  tickit_term_free(tt);
+}
+
+const char *tickit_term_get_termtype(TickitTerm *tt)
+{
+  return tt->termtype;
+}
+
+TickitTermDriver *tickit_term_get_driver(TickitTerm *tt)
+{
+  return tt->driver;
+}
+
+static void *get_tmpbuffer(TickitTerm *tt, size_t len)
+{
+  if(tt->tmpbuffer_len < len) {
+    if(tt->tmpbuffer)
+      free(tt->tmpbuffer);
+    tt->tmpbuffer = malloc(len);
+    tt->tmpbuffer_len = len;
+  }
+
+  return tt->tmpbuffer;
+}
+
+/* Driver API */
+void *tickit_termdrv_get_tmpbuffer(TickitTermDriver *ttd, size_t len)
+{
+  return get_tmpbuffer(ttd->tt, len);
+}
+
+void tickit_term_get_size(const TickitTerm *tt, int *lines, int *cols)
+{
+  if(lines)
+    *lines = tt->lines;
+  if(cols)
+    *cols  = tt->cols;
+}
+
+void tickit_term_set_size(TickitTerm *tt, int lines, int cols)
+{
+  if(tt->lines != lines || tt->cols != cols) {
+    tt->lines = lines;
+    tt->cols  = cols;
+
+    TickitEvent args = { .lines = lines, .cols = cols };
+    run_events(tt, TICKIT_EV_RESIZE, &args);
+  }
+}
+
+void tickit_term_refresh_size(TickitTerm *tt)
+{
+  if(tt->outfd == -1)
+    return;
+
+  struct winsize ws = { 0, 0, 0, 0 };
+  if(ioctl(tt->outfd, TIOCGWINSZ, &ws) == -1)
+    return;
+
+  tickit_term_set_size(tt, ws.ws_row, ws.ws_col);
+}
+
+void tickit_term_set_output_fd(TickitTerm *tt, int fd)
+{
+  tt->outfd = fd;
+
+  tickit_term_refresh_size(tt);
+
+  if(tt->state == UNSTARTED) {
+    if(tt->driver->vtable->start)
+      (*tt->driver->vtable->start)(tt->driver);
+    tt->state = STARTING;
+  }
+}
+
+int tickit_term_get_output_fd(const TickitTerm *tt)
+{
+  return tt->outfd;
+}
+
+void tickit_term_set_output_func(TickitTerm *tt, TickitTermOutputFunc *fn, void *user)
+{
+  tt->outfunc      = fn;
+  tt->outfunc_user = user;
+
+  if(tt->state == UNSTARTED) {
+    if(tt->driver->vtable->start)
+      (*tt->driver->vtable->start)(tt->driver);
+    tt->state = STARTING;
+  }
+}
+
+void tickit_term_set_output_buffer(TickitTerm *tt, size_t len)
+{
+  void *buffer = len ? malloc(len) : NULL;
+
+  if(tt->outbuffer)
+    free(tt->outbuffer);
+
+  tt->outbuffer = buffer;
+  tt->outbuffer_len = len;
+  tt->outbuffer_cur = 0;
+}
+
+void tickit_term_set_input_fd(TickitTerm *tt, int fd)
+{
+  if(tt->termkey)
+    termkey_destroy(tt->termkey);
+
+  tt->infd = fd;
+  (void)get_termkey(tt);
+}
+
+int tickit_term_get_input_fd(const TickitTerm *tt)
+{
+  return tt->infd;
+}
+
+TickitMaybeBool tickit_term_get_utf8(const TickitTerm *tt)
+{
+  return tt->is_utf8;
+}
+
+void tickit_term_set_utf8(TickitTerm *tt, bool utf8)
+{
+  tt->is_utf8 = !!utf8;
+
+  /* TODO: See what we can think of for the output side */
+
+  if(tt->termkey) {
+    int flags = termkey_get_flags(tt->termkey) & ~(TERMKEY_FLAG_UTF8|TERMKEY_FLAG_RAW);
+
+    if(utf8)
+      flags |= TERMKEY_FLAG_UTF8;
+    else
+      flags |= TERMKEY_FLAG_RAW;
+
+    termkey_set_flags(tt->termkey, flags);
+  }
+}
+
+// provide link-time legacy wrappers
+#undef tickit_term_await_started
+
+void tickit_term_await_started(TickitTerm *tt, const struct timeval *timeout)
+{
+  tickit_term_await_started_tv(tt, timeout);
+}
+
+void tickit_term_await_started_msec(TickitTerm *tt, long msec)
+{
+  if(msec > -1)
+    tickit_term_await_started_tv(tt, &(struct timeval){
+        .tv_sec  = msec / 1000,
+        .tv_usec = (msec % 1000) * 1000,
+    });
+  else
+    tickit_term_await_started_tv(tt, NULL);
+}
+
+void tickit_term_await_started_tv(TickitTerm *tt, const struct timeval *timeout)
+{
+  if(tt->state == STARTED)
+    return;
+
+  struct timeval until;
+  gettimeofday(&until, NULL);
+
+  // until += timeout
+  if(until.tv_usec + timeout->tv_usec >= 1E6) {
+    until.tv_sec  += timeout->tv_sec + 1;
+    until.tv_usec += timeout->tv_usec - 1E6;
+  }
+  else {
+    until.tv_sec  += timeout->tv_sec;
+    until.tv_usec += timeout->tv_usec;
+  }
+
+  while(tt->state != STARTED) {
+    if(!tt->driver->vtable->started ||
+       (*tt->driver->vtable->started)(tt->driver))
+      break;
+
+    struct timeval timeout;
+    gettimeofday(&timeout, NULL);
+
+    // timeout = until - timeout
+    if(until.tv_usec < timeout.tv_usec) {
+      timeout.tv_sec  = until.tv_sec  - timeout.tv_sec - 1;
+      timeout.tv_usec = until.tv_usec - timeout.tv_usec + 1E6;
+    }
+    else {
+      timeout.tv_sec  = until.tv_sec  - timeout.tv_sec;
+      timeout.tv_usec = until.tv_usec - timeout.tv_usec;
+    }
+
+    if(timeout.tv_sec < 0)
+      break;
+
+    tickit_term_input_wait_tv(tt, &timeout);
+  }
+
+  tt->state = STARTED;
+}
+
+static void got_key(TickitTerm *tt, TermKey *tk, TermKeyKey *key)
+{
+  TickitEvent args;
+
+  if(tt->driver->vtable->gotkey &&
+     (*tt->driver->vtable->gotkey)(tt->driver, tk, key))
+    return;
+
+  if(key->type == TERMKEY_TYPE_MOUSE) {
+    TermKeyMouseEvent ev;
+    termkey_interpret_mouse(tk, key, &ev, &args.button, &args.line, &args.col);
+    /* TermKey is 1-based, Tickit is 0-based for position */
+    args.line--; args.col--;
+    switch(ev) {
+    case TERMKEY_MOUSE_PRESS:   args.type = TICKIT_MOUSEEV_PRESS;   break;
+    case TERMKEY_MOUSE_DRAG:    args.type = TICKIT_MOUSEEV_DRAG;    break;
+    case TERMKEY_MOUSE_RELEASE: args.type = TICKIT_MOUSEEV_RELEASE; break;
+    default:                    args.type = -1; break;
+    }
+
+    /* Translate PRESS of buttons >= 4 into wheel events */
+    if(ev == TERMKEY_MOUSE_PRESS && args.button >= 4) {
+      args.type = TICKIT_MOUSEEV_WHEEL;
+      args.button -= (4 - TICKIT_MOUSEWHEEL_UP);
+    }
+
+    args.mod = key->modifiers;
+
+    run_events(tt, TICKIT_EV_MOUSE, &args);
+  }
+  else if(key->type == TERMKEY_TYPE_UNICODE && !key->modifiers) {
+    /* Unmodified unicode */
+    args.type = TICKIT_KEYEV_TEXT;
+    args.str  = key->utf8;
+    args.mod  = key->modifiers;
+
+    run_events(tt, TICKIT_EV_KEY, &args);
+  }
+  else if(key->type == TERMKEY_TYPE_UNICODE ||
+          key->type == TERMKEY_TYPE_FUNCTION ||
+          key->type == TERMKEY_TYPE_KEYSYM) {
+    char buffer[64]; // TODO: should be long enough
+    termkey_strfkey(tk, buffer, sizeof buffer, key, TERMKEY_FORMAT_ALTISMETA);
+
+    args.type = TICKIT_KEYEV_KEY;
+    args.str  = buffer;
+    args.mod  = key->modifiers;
+
+    run_events(tt, TICKIT_EV_KEY, &args);
+  }
+}
+
+static void get_keys(TickitTerm *tt, TermKey *tk)
+{
+  TermKeyResult res;
+  TermKeyKey key;
+  while((res = termkey_getkey(tk, &key)) == TERMKEY_RES_KEY) {
+    got_key(tt, tk, &key);
+  }
+
+  if(res == TERMKEY_RES_AGAIN) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+
+    /* tv += waittime in MSEC */
+    int new_usec = tv.tv_usec + (termkey_get_waittime(tk) * MSEC);
+    if(new_usec >= SECOND) {
+      tv.tv_sec++;
+      new_usec -= SECOND;
+    }
+    tv.tv_usec = new_usec;
+
+    tt->input_timeout_at = tv;
+  }
+  else {
+    tt->input_timeout_at.tv_sec = -1;
+  }
+}
+
+void tickit_term_input_push_bytes(TickitTerm *tt, const char *bytes, size_t len)
+{
+  TermKey *tk = get_termkey(tt);
+  termkey_push_bytes(tk, bytes, len);
+
+  get_keys(tt, tk);
+}
+
+void tickit_term_input_readable(TickitTerm *tt)
+{
+  TermKey *tk = get_termkey(tt);
+  termkey_advisereadable(tk);
+
+  get_keys(tt, tk);
+}
+
+// provide link-time legacy wrappers
+#undef tickit_term_input_check_timeout
+#undef tickit_term_input_wait
+
+int tickit_term_input_check_timeout(TickitTerm *tt)
+{
+  return tickit_term_input_check_timeout_msec(tt);
+}
+
+int tickit_term_input_check_timeout_msec(TickitTerm *tt)
+{
+  if(tt->input_timeout_at.tv_sec == -1)
+    return -1;
+
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+
+  /* tv = tt->input_timeout_at - tv */
+  int new_usec = tt->input_timeout_at.tv_usec - tv.tv_usec;
+  tv.tv_sec    = tt->input_timeout_at.tv_sec  - tv.tv_sec;
+  if(new_usec < 0) {
+    tv.tv_sec--;
+    tv.tv_usec = new_usec + SECOND;
+  }
+  else {
+    tv.tv_usec = new_usec;
+  }
+
+  if(tv.tv_sec > 0 || (tv.tv_sec == 0 && tv.tv_usec > 0))
+    return tv.tv_sec * 1000 + (tv.tv_usec+MSEC-1)/MSEC;
+
+  TermKey *tk = get_termkey(tt);
+
+  TermKeyKey key;
+  if(termkey_getkey_force(tk, &key) == TERMKEY_RES_KEY) {
+    got_key(tt, tk, &key);
+  }
+
+  tt->input_timeout_at.tv_sec = -1;
+  return -1;
+}
+
+void tickit_term_input_wait(TickitTerm *tt, const struct timeval *timeout)
+{
+  tickit_term_input_wait_tv(tt, timeout);
+}
+
+void tickit_term_input_wait_msec(TickitTerm *tt, long msec)
+{
+  TermKey *tk = get_termkey(tt);
+  TermKeyKey key;
+
+  struct timeval timeout;
+  if(msec > -1) {
+    timeout.tv_sec = msec / 1000;
+    timeout.tv_usec = (msec % 1000) * 1000;
+  }
+
+  fd_set readfds;
+  int fd = termkey_get_fd(tk);
+  FD_SET(fd, &readfds);
+  if(select(fd + 1, &readfds, NULL, NULL, msec > -1 ? &timeout : NULL) == 1) {
+    termkey_advisereadable(tk);
+  }
+
+  /* Might as well get any more that are ready */
+  while(termkey_getkey(tk, &key) == TERMKEY_RES_KEY) {
+    got_key(tt, tk, &key);
+  }
+}
+
+void tickit_term_input_wait_tv(TickitTerm *tt, const struct timeval *timeout)
+{
+  if(timeout)
+    tickit_term_input_wait_msec(tt, (long)(timeout->tv_sec) + (timeout->tv_usec / 1000));
+  else
+    tickit_term_input_wait_msec(tt, -1);
+}
+
+void tickit_term_flush(TickitTerm *tt)
+{
+  if(tt->outbuffer_cur == 0)
+    return;
+
+  if(tt->outfunc)
+    (*tt->outfunc)(tt, tt->outbuffer, tt->outbuffer_cur, tt->outfunc_user);
+  else if(tt->outfd != -1) {
+    write(tt->outfd, tt->outbuffer, tt->outbuffer_cur);
+  }
+
+  tt->outbuffer_cur = 0;
+}
+
+static void write_str(TickitTerm *tt, const char *str, size_t len)
+{
+  if(len == 0)
+    len = strlen(str);
+
+  if(tt->outbuffer) {
+    while(len > 0) {
+      size_t space = tt->outbuffer_len - tt->outbuffer_cur;
+      if(len < space)
+        space = len;
+      memcpy(tt->outbuffer + tt->outbuffer_cur, str, space);
+      tt->outbuffer_cur += space;
+      len -= space;
+      if(tt->outbuffer_cur >= tt->outbuffer_len)
+        tickit_term_flush(tt);
+    }
+  }
+  else if(tt->outfunc) {
+    (*tt->outfunc)(tt, str, len, tt->outfunc_user);
+  }
+  else if(tt->outfd != -1) {
+    write(tt->outfd, str, len);
+  }
+}
+/* Driver API */
+void tickit_termdrv_write_str(TickitTermDriver *ttd, const char *str, size_t len)
+{
+  write_str(ttd->tt, str, len);
+}
+
+static void write_vstrf(TickitTerm *tt, const char *fmt, va_list args)
+{
+  /* It's likely the output will fit in, say, 64 bytes */
+  char buffer[64];
+  size_t len = vsnprintf(buffer, sizeof buffer, fmt, args);
+
+  if(len < 64) {
+    write_str(tt, buffer, len);
+    return;
+  }
+
+  char *morebuffer = get_tmpbuffer(tt, len + 1);
+  vsnprintf(morebuffer, len + 1, fmt, args);
+
+  write_str(tt, morebuffer, len);
+}
+
+/* Driver API */
+void tickit_termdrv_write_strf(TickitTermDriver *ttd, const char *fmt, ...)
+{
+  va_list args;
+  va_start(args, fmt);
+  write_vstrf(ttd->tt, fmt, args);
+  va_end(args);
+}
+
+void tickit_term_print(TickitTerm *tt, const char *str)
+{
+  (*tt->driver->vtable->print)(tt->driver, str, strlen(str));
+}
+
+void tickit_term_printn(TickitTerm *tt, const char *str, size_t len)
+{
+  (*tt->driver->vtable->print)(tt->driver, str, len);
+}
+
+void tickit_term_printf(TickitTerm *tt, const char *fmt, ...)
+{
+  va_list args;
+  va_start(args, fmt);
+  tickit_term_vprintf(tt, fmt, args);
+  va_end(args);
+}
+
+void tickit_term_vprintf(TickitTerm *tt, const char *fmt, va_list args)
+{
+  va_list args2;
+  va_copy(args2, args);
+
+  size_t len = vsnprintf(NULL, 0, fmt, args);
+  char *buf = get_tmpbuffer(tt, len + 1);
+  vsnprintf(buf, len + 1, fmt, args2);
+  (*tt->driver->vtable->print)(tt->driver, buf, len);
+
+  va_end(args2);
+}
+
+bool tickit_term_goto(TickitTerm *tt, int line, int col)
+{
+  return (*tt->driver->vtable->goto_abs)(tt->driver, line, col);
+}
+
+void tickit_term_move(TickitTerm *tt, int downward, int rightward)
+{
+  (*tt->driver->vtable->move_rel)(tt->driver, downward, rightward);
+}
+
+bool tickit_term_scrollrect(TickitTerm *tt, int top, int left, int lines, int cols, int downward, int rightward)
+{
+  TickitRect rect = {
+    .top   = top,
+    .left  = left,
+    .lines = lines,
+    .cols  = cols,
+  };
+  return (*tt->driver->vtable->scrollrect)(tt->driver, &rect, downward, rightward);
+}
+
+static int convert_colour(int index, int colours)
+{
+  if(colours >= 16)
+    return xterm256[index].as16;
+  else
+    return xterm256[index].as8;
+}
+
+void tickit_term_chpen(TickitTerm *tt, const TickitPen *pen)
+{
+  TickitPen *delta = tickit_pen_new();
+
+  for(TickitPenAttr attr = 0; attr < TICKIT_N_PEN_ATTRS; attr++) {
+    if(!tickit_pen_has_attr(pen, attr))
+      continue;
+
+    if(tickit_pen_has_attr(tt->pen, attr) && tickit_pen_equiv_attr(tt->pen, pen, attr))
+      continue;
+
+    int index;
+    if((attr == TICKIT_PEN_FG || attr == TICKIT_PEN_BG) &&
+       (index = tickit_pen_get_colour_attr(pen, attr)) >= tt->colors) {
+      index = convert_colour(index, tt->colors);
+      tickit_pen_set_colour_attr(tt->pen, attr, index);
+      tickit_pen_set_colour_attr(delta, attr, index);
+    }
+    else {
+      tickit_pen_copy_attr(tt->pen, pen, attr);
+      tickit_pen_copy_attr(delta, pen, attr);
+    }
+  }
+
+  (*tt->driver->vtable->chpen)(tt->driver, delta, tt->pen);
+
+  tickit_pen_destroy(delta);
+}
+
+void tickit_term_setpen(TickitTerm *tt, const TickitPen *pen)
+{
+  TickitPen *delta = tickit_pen_new();
+
+  for(TickitPenAttr attr = 0; attr < TICKIT_N_PEN_ATTRS; attr++) {
+    if(tickit_pen_has_attr(tt->pen, attr) && tickit_pen_equiv_attr(tt->pen, pen, attr))
+      continue;
+
+    int index;
+    if((attr == TICKIT_PEN_FG || attr == TICKIT_PEN_BG) &&
+       (index = tickit_pen_get_colour_attr(pen, attr)) >= tt->colors) {
+      index = convert_colour(index, tt->colors);
+      tickit_pen_set_colour_attr(tt->pen, attr, index);
+      tickit_pen_set_colour_attr(delta, attr, index);
+    }
+    else {
+      tickit_pen_copy_attr(tt->pen, pen, attr);
+      tickit_pen_copy_attr(delta, pen, attr);
+    }
+  }
+
+  (*tt->driver->vtable->chpen)(tt->driver, delta, tt->pen);
+
+  tickit_pen_destroy(delta);
+}
+
+/* Driver API */
+TickitPen *tickit_termdrv_current_pen(TickitTermDriver *ttd)
+{
+  return ttd->tt->pen;
+}
+
+void tickit_term_clear(TickitTerm *tt)
+{
+  (*tt->driver->vtable->clear)(tt->driver);
+}
+
+void tickit_term_erasech(TickitTerm *tt, int count, TickitMaybeBool moveend)
+{
+  (*tt->driver->vtable->erasech)(tt->driver, count, moveend);
+}
+
+bool tickit_term_getctl_int(TickitTerm *tt, TickitTermCtl ctl, int *value)
+{
+  return (*tt->driver->vtable->getctl_int)(tt->driver, ctl, value);
+}
+
+bool tickit_term_setctl_int(TickitTerm *tt, TickitTermCtl ctl, int value)
+{
+  return (*tt->driver->vtable->setctl_int)(tt->driver, ctl, value);
+}
+
+bool tickit_term_setctl_str(TickitTerm *tt, TickitTermCtl ctl, const char *value)
+{
+  return (*tt->driver->vtable->setctl_str)(tt->driver, ctl, value);
+}
