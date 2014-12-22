@@ -22,6 +22,8 @@ TickitWindow *tickit_window_new_popup(TickitWindow *parent, int top, int left, i
 
 void tickit_window_destroy(TickitWindow *window);
 
+void tickit_window_tick(TickitWindow *window);
+
 /* Layering */
 
 void tickit_window_raise(TickitWindow *window);

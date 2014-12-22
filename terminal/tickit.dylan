@@ -1,5 +1,14 @@
 module: tickit
 
+define open generic note-window-exposed
+    (object, window :: <TickitWindow*>,
+     rect :: <TickitRect*>, rb :: <TickitRenderBuffer*>)
+ => ();
+
+define open generic note-window-geometry-changed
+    (object, window :: <TickitWindow*>)
+ => ();
+
 define constant <TickitMaybeBool> = <C-int>;
 define constant $TICKIT-NO = 0;
 define constant $TICKIT-YES = 1;
@@ -1028,6 +1037,11 @@ define C-function tickit-window-destroy
   c-name: "tickit_window_destroy";
 end;
 
+define C-function tickit-window-tick
+  input parameter window_ :: <TickitWindow*>;
+  c-name: "tickit_window_tick";
+end;
+
 define C-function tickit-window-raise
   input parameter window_ :: <TickitWindow*>;
   c-name: "tickit_window_raise";
@@ -1128,11 +1142,11 @@ define C-pointer-type <TickitWindowGeometryChangedFn*> => <TickitWindowGeometryC
 define C-function tickit-window-set-on-geometry-changed
   input parameter window_ :: <TickitWindow*>;
   input parameter fn_ :: <TickitWindowGeometryChangedFn*>;
-  input parameter data_ :: <C-void*>;
+  input parameter data_ :: <C-dylan-object>;
   c-name: "tickit_window_set_on_geometry_changed";
 end;
 
-define C-function tickit-window-set-pen
+define C-function %tickit-window-set-pen
   input parameter window_ :: <TickitWindow*>;
   input parameter pen_ :: <TickitPen*>;
   c-name: "tickit_window_set_pen";
@@ -1149,7 +1163,57 @@ define C-pointer-type <TickitWindowExposeFn*> => <TickitWindowExposeFn>;
 define C-function tickit-window-set-on-expose
   input parameter window_ :: <TickitWindow*>;
   input parameter fn_ :: <TickitWindowExposeFn*>;
-  input parameter data_ :: <C-void*>;
+  input parameter data_ :: <C-dylan-object>;
   c-name: "tickit_window_set_on_expose";
 end;
 
+define constant $everywhere = null-pointer(<TickitRect*>);
+
+define method tickit-window-set-pen
+    (window :: <TickitWindow*>, pen :: false-or(<TickitPen*>))
+ => ()
+  %tickit-window-set-pen(window, if (pen) pen else null-pointer(<TickitPen*>) end);
+end;
+
+define method %window-expose-callback
+    (window :: <TickitWindow*>, rect :: <TickitRect*>,
+     rb :: <TickitRenderBuffer*>, data :: <C-dylan-object>)
+=> ()
+  let object = import-c-dylan-object(data);
+  note-window-exposed(object, window, rect, rb);
+end;
+
+define C-callable-wrapper %expose-callback of %window-expose-callback
+  parameter window :: <TickitWindow*>;
+  parameter rect :: <TickitRect*>;
+  parameter rb :: <TickitRenderBuffer*>;
+  parameter data :: <C-dylan-object>;
+end;
+
+define method tickit-window-notify-on-expose
+    (window :: <TickitWindow*>, object)
+ => ()
+  register-c-dylan-object(object);
+  let data = export-c-dylan-object(object);
+  tickit-window-set-on-expose(window, %expose-callback, data);
+end method;
+
+define method %window-geometry-changed-callback
+    (window :: <TickitWindow*>, data :: <C-dylan-object>)
+=> ()
+  let object = import-c-dylan-object(data);
+  note-window-geometry-changed(object, window);
+end;
+
+define C-callable-wrapper %geometry-changed-callback of %window-geometry-changed-callback
+  parameter window :: <TickitWindow*>;
+  parameter data :: <C-dylan-object>;
+end;
+
+define method tickit-window-notify-on-geometry-changed
+    (window :: <TickitWindow*>, object)
+ => ()
+  register-c-dylan-object(object);
+  let data = export-c-dylan-object(object);
+  tickit-window-set-on-geometry-changed(window, %geometry-changed-callback, data);
+end method;

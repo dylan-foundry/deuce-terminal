@@ -5,21 +5,21 @@ copyright: See LICENSE file in this distribution.
 define class <deuce-terminal-window> (<basic-window>, <widget>)
   slot read-only-label;
   slot buffer-name-label;
-  slot renderbuffer;
 end class <deuce-terminal-window>;
 
 define method initialize (window :: <deuce-terminal-window>, #key)
  => ()
   next-method();
+  let root = tickit-window-new-root(*tickit-term*);
+  widget-window(window) := root;
   let (window-height, window-width) = window-size(window);
   let status-bar-origin = window-height - 2;
-  read-only-label(window) := make(<label>, text: "???",
-                                  origin: make-position(status-bar-origin, window-width - 3),
-                                  size: make-position(1, 3));
-  buffer-name-label(window) := make(<label>, text: "No buffer loaded.",
-                                    origin: make-position(status-bar-origin, 0),
-                                    size: make-position(1, 50));
-  renderbuffer(window) := tickit-renderbuffer-new(window-height, window-width);
+  read-only-label(window) := make(<label>, text: "???");
+  let rolw = tickit-window-new-subwindow(root, status-bar-origin, window-width - 3, 1, 3);
+  widget-window(read-only-label(window)) := rolw;
+  let bnlw = tickit-window-new-subwindow(root, status-bar-origin, 0, 1, 50);
+  buffer-name-label(window) := make(<label>, text: "No buffer loaded.");
+  widget-window(buffer-name-label(window)) := bnlw;
 end method initialize;
 
 define method window-note-buffer-changed
@@ -34,8 +34,6 @@ define method window-note-buffer-read-only
   format-out("DEUCE: window-note-buffer-read-only: %= %=\n", buffer, read-only?);
   let new-text = if (read-only?) "R/O" else "R/W" end;
   label-text(read-only-label(window)) := new-text;
-  draw-widget(read-only-label(window), renderbuffer(window));
-  tickit-renderbuffer-flush-to-term(renderbuffer(window), *tickit-term*);
 end method window-note-buffer-read-only;
 
 define method window-note-buffer-selected
@@ -119,8 +117,6 @@ define sealed method display-buffer-name
   let name = if (buffer) buffer-name(buffer) else "" end;
   format-out("DEUCE: display-buffer-name: \"%s\"\n", name);
   label-text(buffer-name-label(window)) := name;
-  draw-widget(buffer-name-label(window), renderbuffer(window));
-  tickit-renderbuffer-flush-to-term(renderbuffer(window), *tickit-term*);
 end method display-buffer-name;
 
 define sealed method draw-string

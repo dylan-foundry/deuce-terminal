@@ -22,16 +22,22 @@ define module terminal-ui
 
   export terminal-ui-dispatch-events;
 
-  export <label>,
-         label-text,
-         label-text-setter,
-         <status-bar>,
-         <widget>,
-         draw-widget,
+  export <widget>,
+         queue-repaint,
+         handle-repaint,
+         reshape-widget,
+         note-widget-window-gained,
+         note-widget-window-lost,
          widget-children,
-         widget-origin,
-         widget-origin-setter,
          widget-parent,
-         widget-size,
-         widget-size-setter;
+         widget-window,
+         widget-window-setter;
+
+  export <label>,
+         label-pen,
+         label-pen-setter,
+         label-text,
+         label-text-setter;
+
+  export <status-bar>;
 end module;

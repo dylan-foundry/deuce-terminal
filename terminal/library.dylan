@@ -16,6 +16,7 @@ define module tickit
   use c-ffi;
 
   export
+    $everywhere,
     $TICKIT-EV-CHANGE,
     $TICKIT-EV-KEY,
     $TICKIT-EV-MOUSE,
@@ -165,6 +166,8 @@ define module tickit
     TickitStringPos$columns-setter,
     TickitStringPos$graphemes,
     TickitStringPos$graphemes-setter,
+    note-window-exposed,
+    note-window-geometry-changed,
     tickit-pen-attrname,
     tickit-pen-attrtype,
     tickit-pen-bind-event,
@@ -301,15 +304,16 @@ define module tickit
     tickit-window-new-popup,
     tickit-window-new-root,
     tickit-window-new-subwindow,
+    tickit-window-notify-on-expose,
+    tickit-window-notify-on-geometry-changed,
     tickit-window-raise,
     tickit-window-raise-to-front,
     tickit-window-reposition,
     tickit-window-resize,
     tickit-window-set-geometry,
-    tickit-window-set-on-expose,
-    tickit-window-set-on-geometry-changed,
     tickit-window-set-pen,
     tickit-window-show,
+    tickit-window-tick,
     tickit-window-top;
 end module;
 

@@ -93,7 +93,7 @@ static void init_window(TickitWindow *window, TickitWindow *parent, int top, int
   window->cursor.col = 0;
   window->cursor.shape = TICKIT_TERM_CURSORSHAPE_BLOCK;
   window->cursor.visible = false;
-  window->is_visible = false;
+  window->is_visible = true;
   window->is_focused = false;
   window->steal_input = false;
 
@@ -461,8 +461,16 @@ static void _do_restore(TickitRootWindow *root)
   tickit_term_flush(root->term);
 }
 
-static void _do_later_processing(TickitRootWindow *root)
+void tickit_window_tick(TickitWindow *window)
 {
+  if(window->parent) {
+    // Can't tick non-root.
+    return;
+  }
+  TickitRootWindow *root = WINDOW_AS_ROOT(window);
+  if(!root->needs_later_processing) {
+    return;
+  }
   root->needs_later_processing = false;
 
   if(root->hierarchy_changes) {
@@ -595,9 +603,13 @@ static void _do_hierarchy_change(TickitHierarchyChangeType change, TickitWindow 
     case TICKIT_HIERARCHY_INSERT_LAST:
       _do_hierarchy_insert_last(parent, window);
       break;
-    case TICKIT_HIERARCHY_REMOVE:
-      _do_hierarchy_remove(parent, window);
-      break;
+    case TICKIT_HIERARCHY_REMOVE: {
+        _do_hierarchy_remove(parent, window);
+        if(parent->focused_child && parent->focused_child == window) {
+          parent->focused_child = NULL;
+        }
+        break;
+      }
     case TICKIT_HIERARCHY_RAISE:
       _do_hierarchy_raise(parent, window);
       break;
