@@ -9,11 +9,17 @@ else
   DYLAN_COMPILER=dylan-compiler
 endif
 
+terminal/tickit.dylan: terminal/tickit.intr $(wildcard terminal/libtickit/tickit*.h)
+	melange -Tc-ffi -Iterminal/libtermkey -Iterminal/libtickit terminal/tickit.intr terminal/tickit.dylan
+
+# We explicitly add tickit.dylan to the SOURCES in case
+# a melange run failed which would have deleted the file.
 SOURCES = $(wildcard deuce-terminal/*.dylan) \
           $(wildcard standalone/*.dylan) \
           $(wildcard terminal-ui/*.dylan) \
           $(wildcard terminal/*.dylan) \
-          $(wildcard */*.lid)
+          $(wildcard */*.lid) \
+          terminal/tickit.dylan
 
 build: $(SOURCES)
 	$(DYLAN_COMPILER) -build dt
