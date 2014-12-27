@@ -549,18 +549,6 @@ define C-function tickit-term-move
   c-name: "tickit_term_move";
 end;
 
-define C-function tickit-term-scrollrect
-  input parameter tt_ :: <TickitTerm*>;
-  input parameter top_ :: <C-signed-int>;
-  input parameter left_ :: <C-signed-int>;
-  input parameter lines_ :: <C-signed-int>;
-  input parameter cols_ :: <C-signed-int>;
-  input parameter downward_ :: <C-signed-int>;
-  input parameter rightward_ :: <C-signed-int>;
-  result res :: <C-boolean>;
-  c-name: "tickit_term_scrollrect";
-end;
-
 define C-function tickit-term-chpen
   input parameter tt_ :: <TickitTerm*>;
   input parameter pen_ :: <TickitPen*>;
@@ -805,13 +793,13 @@ define C-function tickit-renderbuffer-skip-at
   input parameter rb_ :: <TickitRenderBuffer*>;
   input parameter line_ :: <C-signed-int>;
   input parameter col_ :: <C-signed-int>;
-  input parameter len_ :: <C-signed-int>;
+  input parameter cols_ :: <C-signed-int>;
   c-name: "tickit_renderbuffer_skip_at";
 end;
 
 define C-function tickit-renderbuffer-skip
   input parameter rb_ :: <TickitRenderBuffer*>;
-  input parameter len_ :: <C-signed-int>;
+  input parameter cols_ :: <C-signed-int>;
   c-name: "tickit_renderbuffer_skip";
 end;
 
@@ -831,6 +819,17 @@ define C-function tickit-renderbuffer-text-at
   c-name: "tickit_renderbuffer_text_at";
 end;
 
+define C-function tickit-renderbuffer-textn-at
+  input parameter rb_ :: <TickitRenderBuffer*>;
+  input parameter line_ :: <C-signed-int>;
+  input parameter col_ :: <C-signed-int>;
+  input parameter text_ :: <c-string>;
+  input parameter len_ :: <C-size-t>;
+  input parameter pen_ :: <TickitPen*>;
+  result res :: <C-signed-int>;
+  c-name: "tickit_renderbuffer_textn_at";
+end;
+
 define C-function tickit-renderbuffer-text
   input parameter rb_ :: <TickitRenderBuffer*>;
   input parameter text_ :: <c-string>;
@@ -839,18 +838,27 @@ define C-function tickit-renderbuffer-text
   c-name: "tickit_renderbuffer_text";
 end;
 
+define C-function tickit-renderbuffer-textn
+  input parameter rb_ :: <TickitRenderBuffer*>;
+  input parameter text_ :: <c-string>;
+  input parameter len_ :: <C-size-t>;
+  input parameter pen_ :: <TickitPen*>;
+  result res :: <C-signed-int>;
+  c-name: "tickit_renderbuffer_textn";
+end;
+
 define C-function tickit-renderbuffer-erase-at
   input parameter rb_ :: <TickitRenderBuffer*>;
   input parameter line_ :: <C-signed-int>;
   input parameter col_ :: <C-signed-int>;
-  input parameter len_ :: <C-signed-int>;
+  input parameter cols_ :: <C-signed-int>;
   input parameter pen_ :: <TickitPen*>;
   c-name: "tickit_renderbuffer_erase_at";
 end;
 
 define C-function tickit-renderbuffer-erase
   input parameter rb_ :: <TickitRenderBuffer*>;
-  input parameter len_ :: <C-signed-int>;
+  input parameter cols_ :: <C-signed-int>;
   input parameter pen_ :: <TickitPen*>;
   c-name: "tickit_renderbuffer_erase";
 end;
@@ -927,6 +935,12 @@ define C-function tickit-renderbuffer-flush-to-term
   input parameter rb_ :: <TickitRenderBuffer*>;
   input parameter tt_ :: <TickitTerm*>;
   c-name: "tickit_renderbuffer_flush_to_term";
+end;
+
+define C-function tickit-renderbuffer-blit
+  input parameter dst_ :: <TickitRenderBuffer*>;
+  input parameter src_ :: <TickitRenderBuffer*>;
+  c-name: "tickit_renderbuffer_blit";
 end;
 
 define C-struct <TickitRenderBufferLineMask>
