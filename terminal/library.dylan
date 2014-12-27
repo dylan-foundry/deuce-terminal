@@ -16,6 +16,7 @@ define module tickit
   use c-ffi;
 
   export
+    $default-pen,
     $everywhere,
     $TICKIT-EV-CHANGE,
     $TICKIT-EV-KEY,

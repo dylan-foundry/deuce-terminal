@@ -1182,11 +1182,12 @@ define C-function tickit-window-set-on-expose
 end;
 
 define constant $everywhere = null-pointer(<TickitRect*>);
+define constant $default-pen = null-pointer(<TickitPen*>);
 
 define method tickit-window-set-pen
     (window :: <TickitWindow*>, pen :: false-or(<TickitPen*>))
  => ()
-  %tickit-window-set-pen(window, if (pen) pen else null-pointer(<TickitPen*>) end);
+  %tickit-window-set-pen(window, if (pen) pen else $default-pen end);
 end;
 
 define method %window-expose-callback
