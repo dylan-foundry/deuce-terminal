@@ -5,6 +5,7 @@ copyright: See LICENSE file in this distribution.
 define class <deuce-terminal-window> (<basic-window>, <widget>)
   slot read-only-label;
   slot buffer-name-label;
+  slot backing-store :: <TickitRenderBuffer*>;
 end class <deuce-terminal-window>;
 
 define method initialize (window :: <deuce-terminal-window>, #key)
@@ -20,7 +21,15 @@ define method initialize (window :: <deuce-terminal-window>, #key)
   let bnlw = tickit-window-new-subwindow(root, status-bar-origin, 0, 1, 50);
   buffer-name-label(window) := make(<label>, text: "No buffer loaded.");
   widget-window(buffer-name-label(window)) := bnlw;
+  backing-store(window) := tickit-renderbuffer-new(window-height, window-width);
 end method initialize;
+
+define method handle-repaint
+    (window :: <deuce-terminal-window>, renderbuffer :: <TickitRenderBuffer*>,
+     rect :: <TickitRect*>)
+ => ()
+  tickit-renderbuffer-blit(renderbuffer, backing-store(window));
+end method handle-repaint;
 
 define method window-note-buffer-changed
     (window :: <deuce-terminal-window>, buffer :: <basic-buffer>, modified? :: <boolean>) => ()
@@ -125,8 +134,8 @@ define sealed method draw-string
      #key start: _start, end: _end, color, font, align-x, align-y)
  => ()
   format-out("DEUCE: draw-string \"%s\" @ %=, %=\n", string, line, col);
-  terminal-move-cursor(line, col);
-  tickit-term-print(*tickit-term*, string);
+  tickit-renderbuffer-text-at(backing-store(window), line, col, string, $default-pen);
+  queue-repaint(window, $everywhere);
 end method draw-string;
 
 define sealed method string-size
