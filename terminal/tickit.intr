@@ -28,7 +28,6 @@ define interface
       "tickit_term_await_started_tv",
       "tickit_term_input_wait_tv",
       "tickit_term_printf",
-      "tickit_term_scrollrect",
       "tickit_term_vprintf"
     },
     rename: {

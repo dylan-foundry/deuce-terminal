@@ -549,6 +549,15 @@ define C-function tickit-term-move
   c-name: "tickit_term_move";
 end;
 
+define C-function tickit-term-scrollrect
+  input parameter tt_ :: <TickitTerm*>;
+  input parameter rect_ :: <TickitRect>;
+  input parameter downward_ :: <C-signed-int>;
+  input parameter rightward_ :: <C-signed-int>;
+  result res :: <C-boolean>;
+  c-name: "tickit_term_scrollrect";
+end;
+
 define C-function tickit-term-chpen
   input parameter tt_ :: <TickitTerm*>;
   input parameter pen_ :: <TickitPen*>;

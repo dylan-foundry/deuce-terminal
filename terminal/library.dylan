@@ -281,6 +281,7 @@ define module tickit
     tickit-term-print,
     tickit-term-printn,
     tickit-term-refresh-size,
+    tickit-term-scrollrect,
     tickit-term-set-input-fd,
     tickit-term-set-output-buffer,
     tickit-term-set-output-fd,
