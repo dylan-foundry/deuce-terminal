@@ -13,8 +13,8 @@ define method initialize (window :: <deuce-terminal-window>, #key)
   next-method();
   let root = tickit-window-new-root(*tickit-term*);
   widget-window(window) := root;
-  let (window-height, window-width) = window-size(window);
-  let status-bar-origin = window-height - 2;
+  let (window-width, window-height) = window-size(window);
+  let status-bar-origin = window-height;
   read-only-label(window) := make(<label>, text: "???");
   let rolw = tickit-window-new-subwindow(root, status-bar-origin, window-width - 3, 1, 3);
   widget-window(read-only-label(window)) := rolw;
@@ -83,9 +83,9 @@ end method window-size;
 define sealed method window-viewport-size
     (window :: <deuce-terminal-window>)
  => (width :: <integer>, height :: <integer>)
-  format-out("DEUCE: window-viewport-size\n");
+  let (height, width) = terminal-size();
+  format-out("DEUCE: window-viewport-size => %d %d\n", height - 2, width);
   // Subtract 2 from height for status bar and message area.
-  let (width, height) = terminal-size();
   values(width, height - 2)
 end method window-viewport-size;
 
