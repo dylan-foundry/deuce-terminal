@@ -219,7 +219,7 @@ define sealed method set-caret-position
     (window :: <deuce-terminal-window>, x :: <integer>, y :: <integer>)
  => ()
   format-out("DEUCE: set-caret-position %=, %=\n", x, y);
-  terminal-move-cursor(x, y);
+  tickit-window-focus(widget-window(window), y, x);
 end method set-caret-position;
 
 define sealed method caret-size
@@ -239,14 +239,14 @@ define sealed method show-caret
     (window :: <deuce-terminal-window>, #key tooltip?)
  => ()
   format-out("DEUCE: show-caret tooltip? %=\n", tooltip?);
-  terminal-show-cursor();
+  tickit-window-cursor-visible(widget-window(window), #t);
 end method show-caret;
 
 define sealed method hide-caret
     (window :: <deuce-terminal-window>, #key tooltip?)
  => ()
   format-out("DEUCE: hide-caret tooltip? %=\n", tooltip?);
-  terminal-hide-cursor();
+  tickit-window-cursor-visible(widget-window(window), #f);
 end method hide-caret;
 
 define sealed method font-metrics
