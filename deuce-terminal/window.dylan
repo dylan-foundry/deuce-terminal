@@ -174,6 +174,10 @@ define sealed method clear-area
      left :: <integer>, top :: <integer>, right :: <integer>, bottom :: <integer>)
  => ()
   format-out("DEUCE: clear-area %=, %= -> %=, %=\n", left, top, right, bottom);
+  let rect = make(<TickitRect*>);
+  tickit-rect-init-sized(rect, top, left, bottom, right);
+  tickit-renderbuffer-eraserect(backing-store(window), rect, $default-pen);
+  queue-repaint(window, rect);
 end method clear-area;
 
 define sealed method copy-area
