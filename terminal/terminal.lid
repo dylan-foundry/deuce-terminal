@@ -1,6 +1,5 @@
 library: terminal
 files: library
-       cursor
        geometry
        terminal
        tickit

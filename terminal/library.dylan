@@ -342,10 +342,6 @@ define module terminal
 
   export terminal-size;
 
-  export terminal-move-cursor,
-         terminal-show-cursor,
-         terminal-hide-cursor;
-
   export <position>,
          make-position,
          position-position,
