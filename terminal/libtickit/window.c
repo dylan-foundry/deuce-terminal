@@ -29,7 +29,7 @@ typedef enum {
 struct TickitWindowCursorData {
   int line;
   int col;
-  int shape;
+  TickitTermCursorShape shape;
   bool visible;
 };
 
@@ -44,10 +44,13 @@ struct TickitWindow {
   bool is_visible;
   bool is_focused;
   bool steal_input;
+  bool focus_child_notify;
 
   /* Callbacks */
   TickitWindowExposeFn *on_expose;
   void *on_expose_data;
+  TickitWindowFocusFn *on_focus;
+  void *on_focus_data;
   TickitWindowGeometryChangedFn *on_geometry_changed;
   void *on_geometry_changed_data;
 };
@@ -96,9 +99,12 @@ static void init_window(TickitWindow *window, TickitWindow *parent, int top, int
   window->is_visible = true;
   window->is_focused = false;
   window->steal_input = false;
+  window->focus_child_notify = false;
 
   window->on_expose = NULL;
   window->on_expose_data = NULL;
+  window->on_focus = NULL;
+  window->on_focus_data = NULL;
   window->on_geometry_changed = NULL;
   window->on_geometry_changed_data = NULL;
 }
@@ -190,6 +196,8 @@ void tickit_window_destroy(TickitWindow *window)
 
   window->on_expose = NULL;
   window->on_expose_data = NULL;
+  window->on_focus = NULL;
+  window->on_focus_data = NULL;
   window->on_geometry_changed = NULL;
   window->on_geometry_changed_data = NULL;
 
@@ -556,7 +564,7 @@ static void _do_hierarchy_raise(TickitWindow *parent, TickitWindow *window)
     TickitWindow *prev = NULL;
     for(TickitWindow *curr = parent->children; curr; curr = curr->next) {
       if(curr->next == window) {
-        /* We have: 
+        /* We have:
          *  prev -> curr -> window
          * we want:
          *  prev -> window -> curr */
@@ -674,4 +682,89 @@ static void _purge_hierarchy_changes(TickitWindow *window)
   /* Now, iterate through the list removing any other nodes */
   HierarchyChange *chain = root->hierarchy_changes;
   /* TODO: Finish */
+}
+
+void tickit_window_cursor_at(TickitWindow *window, int line, int col)
+{
+  window->cursor.line = line;
+  window->cursor.col = col;
+  if(window->is_focused) {
+    _request_restore(_get_root(window));
+  }
+}
+
+void tickit_window_cursor_visible(TickitWindow *window, bool visible)
+{
+  window->cursor.visible = visible;
+  if(window->is_focused) {
+    _request_restore(_get_root(window));
+  }
+}
+
+void tickit_window_cursor_shape(TickitWindow *window, TickitTermCursorShape shape)
+{
+  window->cursor.shape = shape;
+  if(window->is_focused) {
+    _request_restore(_get_root(window));
+  }
+}
+
+static void _focus_gained(TickitWindow *window, TickitWindow *child);
+static void _focus_lost(TickitWindow *window);
+
+void tickit_window_take_focus(TickitWindow *window)
+{
+  _focus_gained(window, NULL);
+}
+
+void tickit_window_focus(TickitWindow *window, int lines, int cols)
+{
+  tickit_window_cursor_at(window, lines, cols);
+  tickit_window_take_focus(window);
+}
+
+static void _focus_gained(TickitWindow *window, TickitWindow *child)
+{
+  if(window->focused_child && child && window->focused_child != child) {
+    _focus_lost(window->focused_child);
+  }
+  if(window->parent) {
+    if(window->is_visible) {
+      _focus_gained(window->parent, window);
+    }
+  } else {
+    _request_restore(_get_root(window));
+  }
+  if(!child) {
+    window->is_focused = true;
+    if(window->on_focus) {
+      window->on_focus(window, true, NULL, window->on_focus_data);
+    }
+  } else if(window->focus_child_notify) {
+    if(window->on_focus) {
+      window->on_focus(window, true, child, window->on_focus_data);
+    }
+  }
+  window->focused_child = child;
+}
+
+static void _focus_lost(TickitWindow *window)
+{
+  if(window->focused_child) {
+   _focus_lost(window->focused_child);
+   if(window->on_focus && window->focus_child_notify) {
+     window->on_focus(window, false, window->focused_child, window->on_focus_data);
+   }
+  }
+}
+
+bool tickit_window_is_focused(TickitWindow *window)
+{
+  return window->is_focused;
+}
+
+void tickit_window_set_on_focus(TickitWindow *window, TickitWindowFocusFn *fn, void *data)
+{
+  window->on_focus = fn;
+  window->on_focus_data = data;
 }

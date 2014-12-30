@@ -61,6 +61,25 @@ void tickit_window_expose(TickitWindow *window, const TickitRect *exposed);
 typedef void TickitWindowExposeFn(TickitWindow *window, const TickitRect *rect, TickitRenderBuffer *rb, void *data);
 void tickit_window_set_on_expose(TickitWindow *window, TickitWindowExposeFn *fn, void *data);
 
+/* Cursor */
+
+void tickit_window_cursor_at(TickitWindow *window, int line, int col);
+
+void tickit_window_cursor_visible(TickitWindow *window, bool visible);
+
+void tickit_window_cursor_shape(TickitWindow *window, TickitTermCursorShape shape);
+
+/* Focus */
+
+void tickit_window_take_focus(TickitWindow *window);
+
+void tickit_window_focus(TickitWindow *window, int lines, int cols);
+
+bool tickit_window_is_focused(TickitWindow *window);
+
+typedef void TickitWindowFocusFn(TickitWindow *window, bool focused, TickitWindow *child, void *data);
+void tickit_window_set_on_focus(TickitWindow *window, TickitWindowFocusFn *fn, void *data);
+
 #endif
 
 #ifdef __cplusplus

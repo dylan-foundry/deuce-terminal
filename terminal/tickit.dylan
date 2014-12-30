@@ -1190,6 +1190,52 @@ define C-function tickit-window-set-on-expose
   c-name: "tickit_window_set_on_expose";
 end;
 
+define C-function tickit-window-cursor-at
+  input parameter window_ :: <TickitWindow*>;
+  input parameter line_ :: <C-signed-int>;
+  input parameter col_ :: <C-signed-int>;
+  c-name: "tickit_window_cursor_at";
+end;
+
+define C-function tickit-window-cursor-visible
+  input parameter window_ :: <TickitWindow*>;
+  input parameter visible_ :: <C-boolean>;
+  c-name: "tickit_window_cursor_visible";
+end;
+
+define C-function tickit-window-cursor-shape
+  input parameter window_ :: <TickitWindow*>;
+  input parameter shape_ :: <TickitTermCursorShape>;
+  c-name: "tickit_window_cursor_shape";
+end;
+
+define C-function tickit-window-take-focus
+  input parameter window_ :: <TickitWindow*>;
+  c-name: "tickit_window_take_focus";
+end;
+
+define C-function tickit-window-focus
+  input parameter window_ :: <TickitWindow*>;
+  input parameter lines_ :: <C-signed-int>;
+  input parameter cols_ :: <C-signed-int>;
+  c-name: "tickit_window_focus";
+end;
+
+define C-function tickit-window-is-focused
+  input parameter window_ :: <TickitWindow*>;
+  result res :: <C-boolean>;
+  c-name: "tickit_window_is_focused";
+end;
+
+define constant <TickitWindowFocusFn> = <C-function-pointer>;
+define C-pointer-type <TickitWindowFocusFn*> => <TickitWindowFocusFn>;
+define C-function tickit-window-set-on-focus
+  input parameter window_ :: <TickitWindow*>;
+  input parameter fn_ :: <TickitWindowFocusFn*>;
+  input parameter data_ :: <C-void*>;
+  c-name: "tickit_window_set_on_focus";
+end;
+
 define constant $everywhere = null-pointer(<TickitRect*>);
 define constant $default-pen = null-pointer(<TickitPen*>);
 
