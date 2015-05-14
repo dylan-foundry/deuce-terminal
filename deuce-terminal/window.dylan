@@ -83,7 +83,9 @@ end method window-size;
 define sealed method window-viewport-size
     (window :: <deuce-terminal-window>)
  => (width :: <integer>, height :: <integer>)
-  let (height, width) = terminal-size();
+  let w = widget-window(window);
+  let height = tickit-window-lines(w);
+  let width = tickit-window-cols(w);
   format-out("DEUCE: window-viewport-size => %d %d\n", height - 2, width);
   // Subtract 2 from height for status bar and message area.
   values(width, height - 2)

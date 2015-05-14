@@ -35,8 +35,3 @@ define function terminal-shutdown ()
   tickit-term-destroy(*tickit-term*);
   *tickit-term* := #f;
 end function;
-
-define function terminal-size ()
- => (lines :: <integer>, cols :: <integer>)
-  tickit-term-get-size(*tickit-term*)
-end function;

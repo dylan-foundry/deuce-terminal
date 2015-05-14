@@ -340,8 +340,6 @@ define module terminal
   export terminal-init,
          terminal-shutdown;
 
-  export terminal-size;
-
   export <position>,
          make-position,
          position-position,
