@@ -53,13 +53,14 @@ define interface
   function "tickit_renderbuffer_get_size",
     output-argument: 2,
     output-argument: 3;
-
-  function "tickit_window_set_on_expose",
-    map-argument: { 3 => <C-dylan-object> };
-
-  function "tickit_window_set_on_geometry_changed",
-    map-argument: { 3 => <C-dylan-object> };
 end interface;
+
+define C-pointer-type <TickitExposeEventInfo*> => <TickitExposeEventInfo>;
+define C-pointer-type <TickitFocusEventInfo*> => <TickitFocusEventInfo>;
+define C-pointer-type <TickitGeomchangeEventInfo*> => <TickitGeomchangeEventInfo>;
+define C-pointer-type <TickitKeyEventInfo*> => <TickitKeyEventInfo>;
+define C-pointer-type <TickitMouseEventInfo*> => <TickitMouseEventInfo>;
+define C-pointer-type <TickitResizeEventInfo*> => <TickitResizeEventInfo>;
 
 define constant $everywhere = null-pointer(<TickitRect*>);
 define constant $default-pen = null-pointer(<TickitPen*>);
@@ -71,17 +72,19 @@ define method tickit-window-set-pen
 end;
 
 define method %window-expose-callback
-    (window :: <TickitWindow*>, rect :: <TickitRect*>,
-     rb :: <TickitRenderBuffer*>, data :: <C-dylan-object>)
+    (window :: <TickitWindow*>, event-type :: <integer>,
+     info :: <TickitExposeEventInfo*>, data :: <C-dylan-object>)
 => ()
   let object = import-c-dylan-object(data);
+  let rect = TickitExposeEventInfo$rect(info);
+  let rb = TickitExposeEventInfo$rb(info);
   note-window-exposed(object, window, rect, rb);
 end;
 
 define C-callable-wrapper %expose-callback of %window-expose-callback
   parameter window :: <TickitWindow*>;
-  parameter rect :: <TickitRect*>;
-  parameter rb :: <TickitRenderBuffer*>;
+  parameter event-type :: <TickitEventType>;
+  parameter info :: <TickitExposeEventInfo*>;
   parameter data :: <C-dylan-object>;
 end;
 
@@ -90,11 +93,12 @@ define method tickit-window-notify-on-expose
  => ()
   register-c-dylan-object(object);
   let data = export-c-dylan-object(object);
-  tickit-window-set-on-expose(window, %expose-callback, data);
+  tickit-window-bind-event(window, $TICKIT-EV-EXPOSE, %expose-callback, data);
 end method;
 
 define method %window-geometry-changed-callback
-    (window :: <TickitWindow*>, data :: <C-dylan-object>)
+    (window :: <TickitWindow*>, event-type :: <integer>,
+     info :: <TickitExposeEventInfo*>, data :: <C-dylan-object>)
 => ()
   let object = import-c-dylan-object(data);
   note-window-geometry-changed(object, window);
@@ -102,6 +106,8 @@ end;
 
 define C-callable-wrapper %geometry-changed-callback of %window-geometry-changed-callback
   parameter window :: <TickitWindow*>;
+  parameter event-type :: <TickitEventType>;
+  parameter info :: <TickitExposeEventInfo*>;
   parameter data :: <C-dylan-object>;
 end;
 
@@ -110,5 +116,5 @@ define method tickit-window-notify-on-geometry-changed
  => ()
   register-c-dylan-object(object);
   let data = export-c-dylan-object(object);
-  tickit-window-set-on-geometry-changed(window, %geometry-changed-callback, data);
+  tickit-window-bind-event(window, $TICKIT-EV-GEOMCHANGE, %geometry-changed-callback, data);
 end method;

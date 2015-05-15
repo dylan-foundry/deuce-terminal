@@ -110,6 +110,8 @@ struct TIDriver {
 
     // Formatting
     const char *sgr;    // Select Graphic Rendition
+    const char *sgr0;   // Exit Attribute Mode
+    const char *sgr_i0, *sgr_i1; // SGR italic off/on
     const char *sgr_fg; // SGR foreground colour
     const char *sgr_bg; // SGR background colour
 
@@ -120,9 +122,10 @@ struct TIDriver {
   const struct TermInfoExtraStrings *extra;
 };
 
-static void print(TickitTermDriver *ttd, const char *str, size_t len)
+static bool print(TickitTermDriver *ttd, const char *str, size_t len)
 {
   tickit_termdrv_write_str(ttd, str, len);
+  return true;
 }
 
 static void run_ti(TickitTermDriver *ttd, const char *str, int n_params, ...)
@@ -183,7 +186,7 @@ static bool goto_abs(TickitTermDriver *ttd, int line, int col)
   return true;
 }
 
-static void move_rel(TickitTermDriver *ttd, int downward, int rightward)
+static bool move_rel(TickitTermDriver *ttd, int downward, int rightward)
 {
   struct TIDriver *td = (struct TIDriver*)ttd;
 
@@ -204,6 +207,8 @@ static void move_rel(TickitTermDriver *ttd, int downward, int rightward)
     run_ti(ttd, td->str.cuf, 1, rightward);
   else if(rightward < 0)
     run_ti(ttd, td->str.cub, 1, -rightward);
+
+  return true;
 }
 
 static bool scrollrect(TickitTermDriver *ttd, const TickitRect *rect, int downward, int rightward)
@@ -254,12 +259,12 @@ static bool scrollrect(TickitTermDriver *ttd, const TickitRect *rect, int downwa
   return false;
 }
 
-static void erasech(TickitTermDriver *ttd, int count, TickitMaybeBool moveend)
+static bool erasech(TickitTermDriver *ttd, int count, TickitMaybeBool moveend)
 {
   struct TIDriver *td = (struct TIDriver *)ttd;
 
   if(count < 1)
-    return;
+    return true;
 
   /* Even if the terminal can do bce, only use ECH if we're not in
    * reverse-video mode. Most terminals don't do rv+ECH properly
@@ -267,7 +272,7 @@ static void erasech(TickitTermDriver *ttd, int count, TickitMaybeBool moveend)
   if(td->cap.bce && !tickit_pen_get_bool_attr(tickit_termdrv_current_pen(ttd), TICKIT_PEN_REVERSE)) {
     run_ti(ttd, td->str.ech, 1, count);
 
-    if(moveend == TICKIT_MOVE_YES)
+    if(moveend == TICKIT_YES)
       move_rel(ttd, 0, count);
   }
   else {
@@ -281,19 +286,23 @@ static void erasech(TickitTermDriver *ttd, int count, TickitMaybeBool moveend)
     }
     tickit_termdrv_write_str(ttd, spaces, count);
 
-    if(moveend == TICKIT_MOVE_NO)
+    if(moveend == TICKIT_NO)
       move_rel(ttd, 0, -count);
   }
+
+  return true;
 }
 
-static void clear(TickitTermDriver *ttd)
+static bool clear(TickitTermDriver *ttd)
 {
   struct TIDriver *td = (struct TIDriver *)ttd;
 
   run_ti(ttd, td->str.ed2, 0);
+
+  return true;
 }
 
-static void chpen(TickitTermDriver *ttd, const TickitPen *delta, const TickitPen *final)
+static bool chpen(TickitTermDriver *ttd, const TickitPen *delta, const TickitPen *final)
 {
   struct TIDriver *td = (struct TIDriver *)ttd;
 
@@ -313,6 +322,13 @@ static void chpen(TickitTermDriver *ttd, const TickitPen *delta, const TickitPen
       0, // protect
       0); // alt charset
 
+  if(tickit_pen_has_attr(delta, TICKIT_PEN_ITALIC)) {
+    if(td->str.sgr_i1 && tickit_pen_get_bool_attr(delta, TICKIT_PEN_ITALIC))
+      run_ti(ttd, td->str.sgr_i1, 0);
+    else if(td->str.sgr_i0)
+      run_ti(ttd, td->str.sgr_i0, 0);
+  }
+
   int c;
   if((c = tickit_pen_get_colour_attr(final, TICKIT_PEN_FG)) > -1 &&
       c < td->cap.colours)
@@ -321,77 +337,79 @@ static void chpen(TickitTermDriver *ttd, const TickitPen *delta, const TickitPen
   if((c = tickit_pen_get_colour_attr(final, TICKIT_PEN_BG)) > -1 &&
       c < td->cap.colours)
     run_ti(ttd, td->str.sgr_bg, 1, c);
+
+  return true;
 }
 
-static int getctl_int(TickitTermDriver *ttd, TickitTermCtl ctl, int *value)
+static bool getctl_int(TickitTermDriver *ttd, TickitTermCtl ctl, int *value)
 {
   struct TIDriver *td = (struct TIDriver *)ttd;
 
   switch(ctl) {
     case TICKIT_TERMCTL_ALTSCREEN:
       *value = td->mode.altscreen;
-      return 1;
+      return true;
 
     case TICKIT_TERMCTL_CURSORVIS:
       *value = td->mode.cursorvis;
-      return 1;
+      return true;
 
     case TICKIT_TERMCTL_MOUSE:
       *value = td->mode.mouse;
-      return 1;
+      return true;
 
     case TICKIT_TERMCTL_COLORS:
       *value = td->cap.colours;
-      return 1;
+      return true;
 
     default:
-      return 0;
+      return false;
   }
 }
 
-static int setctl_int(TickitTermDriver *ttd, TickitTermCtl ctl, int value)
+static bool setctl_int(TickitTermDriver *ttd, TickitTermCtl ctl, int value)
 {
   struct TIDriver *td = (struct TIDriver *)ttd;
 
   switch(ctl) {
     case TICKIT_TERMCTL_ALTSCREEN:
       if(!td->extra->enter_altscreen_mode)
-        return 0;
+        return false;
 
       if(!td->mode.altscreen == !value)
-        return 1;
+        return true;
 
       tickit_termdrv_write_str(ttd, value ? td->extra->enter_altscreen_mode : td->extra->exit_altscreen_mode, 0);
       td->mode.altscreen = !!value;
-      return 1;
+      return true;
 
     case TICKIT_TERMCTL_CURSORVIS:
       if(!td->mode.cursorvis == !value)
-        return 1;
+        return true;
 
       run_ti(ttd, value ? td->str.sm_csr : td->str.rm_csr, 0);
       td->mode.cursorvis = !!value;
-      return 1;
+      return true;
 
     case TICKIT_TERMCTL_MOUSE:
       if(!td->extra->enter_mouse_mode)
-        return 0;
+        return false;
 
       if(!td->mode.mouse == !value)
-        return 1;
+        return true;
 
       tickit_termdrv_write_str(ttd, value ? td->extra->enter_mouse_mode : td->extra->exit_mouse_mode, 0);
       td->mode.mouse = !!value;
-      return 1;
+      return true;
 
     default:
-      return 0;
+      return false;
   }
 }
 
-static int setctl_str(TickitTermDriver *ttd, TickitTermCtl ctl, const char *value)
+static bool setctl_str(TickitTermDriver *ttd, TickitTermCtl ctl, const char *value)
 {
-  return 0;
+  return false;
 }
 
 static void attach(TickitTermDriver *ttd, TickitTerm *tt)
@@ -417,6 +435,8 @@ static void stop(TickitTermDriver *ttd)
     setctl_int(ttd, TICKIT_TERMCTL_CURSORVIS, 1);
   if(td->mode.altscreen)
     setctl_int(ttd, TICKIT_TERMCTL_ALTSCREEN, 0);
+
+  run_ti(ttd, td->str.sgr0, 0);
 }
 
 static void destroy(TickitTermDriver *ttd)
@@ -486,6 +506,9 @@ static TickitTermDriver *new(const char *termtype)
   td->str.ed2    = require_ti_string(ut, termtype, unibi_clear_screen, "ed2");
   td->str.stbm   = require_ti_string(ut, termtype, unibi_change_scroll_region, "stbm");
   td->str.sgr    = require_ti_string(ut, termtype, unibi_set_attributes, "sgr");
+  td->str.sgr0   = require_ti_string(ut, termtype, unibi_exit_attribute_mode, "sgr0");
+  td->str.sgr_i0 = lookup_ti_string(ut, termtype, unibi_exit_italics_mode);
+  td->str.sgr_i1 = lookup_ti_string(ut, termtype, unibi_enter_italics_mode);
   td->str.sgr_fg = require_ti_string(ut, termtype, unibi_set_a_foreground, "sgr_fg");
   td->str.sgr_bg = require_ti_string(ut, termtype, unibi_set_a_background, "sgr_bg");
 

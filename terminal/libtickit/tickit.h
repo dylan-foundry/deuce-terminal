@@ -12,6 +12,8 @@ extern "C" {
 
 #include <sys/time.h>
 
+typedef enum TickitEventType TickitEventType;
+
 /* a tri-state yes/no/don't-know type */
 
 typedef enum {
@@ -19,52 +21,6 @@ typedef enum {
   TICKIT_YES   =  1,
   TICKIT_MAYBE = -1,
 } TickitMaybeBool;
-
-/*
- * Tickit events
- */
-
-/* bitmasks */
-typedef enum {
-  TICKIT_EV_RESIZE = 0x01, // Term = lines, cols
-  TICKIT_EV_KEY    = 0x02, // Term = type(TickitKeyEventType), str
-  TICKIT_EV_MOUSE  = 0x04, // Term = type(TickitMouseEventType), button, line, col
-  TICKIT_EV_CHANGE = 0x08, // Pen = {none}
-
-  TICKIT_EV_UNBIND = 0x80000000, // event handler is being unbound
-} TickitEventType;
-
-typedef enum {
-  TICKIT_KEYEV_KEY = 1,
-  TICKIT_KEYEV_TEXT,
-} TickitKeyEventType;
-
-typedef enum {
-  TICKIT_MOUSEEV_PRESS = 1,
-  TICKIT_MOUSEEV_DRAG,
-  TICKIT_MOUSEEV_RELEASE,
-  TICKIT_MOUSEEV_WHEEL,
-} TickitMouseEventType;
-
-enum {
-  TICKIT_MOUSEWHEEL_UP = 1,
-  TICKIT_MOUSEWHEEL_DOWN,
-};
-
-enum {
-  TICKIT_MOD_SHIFT = 0x01,
-  TICKIT_MOD_ALT   = 0x02,
-  TICKIT_MOD_CTRL  = 0x04,
-};
-
-typedef struct {
-  int         lines, cols; // RESIZE
-  int         type;        // KEY, MOUSE
-  const char *str;         // KEY
-  int         button;      // MOUSE
-  int         line, col;   // MOUSE
-  int         mod;         // KEY, MOUSE
-} TickitEvent;
 
 /*
  * TickitPen
@@ -121,7 +77,7 @@ bool tickit_pen_equiv(const TickitPen *a, const TickitPen *b);
 void tickit_pen_copy_attr(TickitPen *dst, const TickitPen *src, TickitPenAttr attr);
 void tickit_pen_copy(TickitPen *dst, const TickitPen *src, bool overwrite);
 
-typedef void TickitPenEventFn(TickitPen *tt, TickitEventType ev, TickitEvent *args, void *data);
+typedef int TickitPenEventFn(TickitPen *tt, TickitEventType ev, void *info, void *data);
 
 int  tickit_pen_bind_event(TickitPen *tt, TickitEventType ev, TickitPenEventFn *fn, void *data);
 void tickit_pen_unbind_event_id(TickitPen *tt, int id);
@@ -224,7 +180,7 @@ void tickit_term_get_size(const TickitTerm *tt, int *lines, int *cols);
 void tickit_term_set_size(TickitTerm *tt, int lines, int cols);
 void tickit_term_refresh_size(TickitTerm *tt);
 
-typedef void TickitTermEventFn(TickitTerm *tt, TickitEventType ev, TickitEvent *args, void *data);
+typedef int TickitTermEventFn(TickitTerm *tt, TickitEventType ev, void *info, void *data);
 
 int  tickit_term_bind_event(TickitTerm *tt, TickitEventType ev, TickitTermEventFn *fn, void *data);
 void tickit_term_unbind_event_id(TickitTerm *tt, int id);
@@ -424,6 +380,69 @@ struct TickitRenderBufferSpanInfo {
 
 // returns the text length or -1 on error
 size_t tickit_renderbuffer_get_span(TickitRenderBuffer *rb, int line, int startcol, struct TickitRenderBufferSpanInfo *info, char *buffer, size_t len);
+
+/*
+ * Window
+ */
+
+typedef struct TickitWindow TickitWindow;
+
+/*
+ * Tickit events
+ */
+
+/* bitmasks */
+enum TickitEventType {
+  TICKIT_EV_RESIZE     = 0x01, // Term = lines, cols
+  TICKIT_EV_KEY        = 0x02, // Term,Win = type(TickitKeyEventType), str
+  TICKIT_EV_MOUSE      = 0x04, // Term = type(TickitMouseEventType), button, line, col
+  TICKIT_EV_CHANGE     = 0x08, // Pen = {none}
+  TICKIT_EV_GEOMCHANGE = 0x10, // Win = rect
+  TICKIT_EV_EXPOSE     = 0x20, // Win = rect, rb
+  TICKIT_EV_FOCUS      = 0x40, // Win = type(TickitFocusEventType)
+
+  TICKIT_EV_UNBIND = 0x80000000, // event handler is being unbound
+};
+
+typedef struct {
+  int lines, cols;
+} TickitResizeEventInfo;
+
+typedef enum {
+  TICKIT_KEYEV_KEY = 1,
+  TICKIT_KEYEV_TEXT,
+} TickitKeyEventType;
+
+typedef struct {
+  TickitKeyEventType type;
+  int mod;
+  const char *str;
+} TickitKeyEventInfo;
+
+typedef enum {
+  TICKIT_MOUSEEV_PRESS = 1,
+  TICKIT_MOUSEEV_DRAG,
+  TICKIT_MOUSEEV_RELEASE,
+  TICKIT_MOUSEEV_WHEEL,
+} TickitMouseEventType;
+
+enum {
+  TICKIT_MOUSEWHEEL_UP = 1,
+  TICKIT_MOUSEWHEEL_DOWN,
+};
+
+typedef struct {
+  TickitMouseEventType type;
+  int button;
+  int mod;
+  int line, col;
+} TickitMouseEventInfo;
+
+enum {
+  TICKIT_MOD_SHIFT = 0x01,
+  TICKIT_MOD_ALT   = 0x02,
+  TICKIT_MOD_CTRL  = 0x04,
+};
 
 #endif
 

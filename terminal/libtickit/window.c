@@ -1,15 +1,15 @@
 #include "tickit-window.h"
+#include "hooklists.h"
 
 #include <stdio.h>
 
 /* TODO:
- * Event handling.
- * Focus handling.
- * The "later" system that lets us trigger actual changes.
+ *   Scrolling
+ *   Input events (mouse, keyboard)
  */
 
 #define ROOT_AS_WINDOW(root) (TickitWindow*)root
-#define WINDOW_AS_ROOT(window) (TickitRootWindow*)window
+#define WINDOW_AS_ROOT(win) (TickitRootWindow*)win
 
 typedef enum {
   TICKIT_HIERARCHY_INSERT_FIRST,
@@ -19,53 +19,42 @@ typedef enum {
   TICKIT_HIERARCHY_RAISE_FRONT,
   TICKIT_HIERARCHY_LOWER,
   TICKIT_HIERARCHY_LOWER_BACK
-} TickitHierarchyChangeType;
-
-typedef enum {
-  TICKIT_IMMEDIATE,
-  TICKIT_DEFER
-} TickitWhen;
-
-struct TickitWindowCursorData {
-  int line;
-  int col;
-  TickitTermCursorShape shape;
-  bool visible;
-};
+} HierarchyChangeType;
 
 struct TickitWindow {
   TickitWindow *parent;
-  TickitWindow *children;
+  TickitWindow *first_child;
   TickitWindow *next;
   TickitWindow *focused_child;
   TickitPen *pen;
   TickitRect rect;
-  struct TickitWindowCursorData cursor;
+  struct {
+    int line;
+    int col;
+    TickitTermCursorShape shape;
+    bool visible;
+  } cursor;
   bool is_visible;
   bool is_focused;
   bool steal_input;
   bool focus_child_notify;
 
-  /* Callbacks */
-  TickitWindowExposeFn *on_expose;
-  void *on_expose_data;
-  TickitWindowFocusFn *on_focus;
-  void *on_focus_data;
-  TickitWindowGeometryChangedFn *on_geometry_changed;
-  void *on_geometry_changed_data;
+  struct TickitEventHook *hooks;
 };
+
+DEFINE_HOOKLIST_FUNCS(window,TickitWindow,TickitWindowEventFn)
 
 typedef struct HierarchyChange HierarchyChange;
 struct HierarchyChange {
-  TickitHierarchyChangeType change;
+  HierarchyChangeType change;
   TickitWindow *parent;
-  TickitWindow *window;
+  TickitWindow *win;
   HierarchyChange *next;
 };
 
 typedef struct TickitRootWindow TickitRootWindow;
 struct TickitRootWindow {
-  TickitWindow window;
+  TickitWindow win;
 
   TickitTerm *term;
   TickitRectSet *damage;
@@ -73,51 +62,68 @@ struct TickitRootWindow {
   bool needs_expose;
   bool needs_restore;
   bool needs_later_processing;
+
+  int event_id;
 };
 
 static void _request_restore(TickitRootWindow *root);
 static void _request_later_processing(TickitRootWindow *root);
-static void _request_hierarchy_change(TickitHierarchyChangeType, TickitWindow*, TickitWhen);
-static void _do_hierarchy_change(TickitHierarchyChangeType change, TickitWindow *parent, TickitWindow *window);
-static void _purge_hierarchy_changes(TickitWindow *window);
+static void _request_hierarchy_change(HierarchyChangeType, TickitWindow *);
+static void _do_hierarchy_change(HierarchyChangeType change, TickitWindow *parent, TickitWindow *win);
+static void _purge_hierarchy_changes(TickitWindow *win);
+static int _handle_key(TickitWindow *win, TickitKeyEventInfo *args);
+static int _handle_mouse(TickitWindow *win, TickitMouseEventInfo *args);
 
-static void init_window(TickitWindow *window, TickitWindow *parent, int top, int left, int lines, int cols)
+static int on_term(TickitTerm *term, TickitEventType ev, void *_info, void *data)
 {
-  window->parent = parent;
-  window->children = NULL;
-  window->next = NULL;
-  window->focused_child = NULL;
-  window->pen = NULL;
-  window->rect.top = top;
-  window->rect.left = left;
-  window->rect.lines = lines;
-  window->rect.cols = cols;
-  window->cursor.line = 0;
-  window->cursor.col = 0;
-  window->cursor.shape = TICKIT_TERM_CURSORSHAPE_BLOCK;
-  window->cursor.visible = false;
-  window->is_visible = true;
-  window->is_focused = false;
-  window->steal_input = false;
-  window->focus_child_notify = false;
+  TickitRootWindow *root = data;
 
-  window->on_expose = NULL;
-  window->on_expose_data = NULL;
-  window->on_focus = NULL;
-  window->on_focus_data = NULL;
-  window->on_geometry_changed = NULL;
-  window->on_geometry_changed_data = NULL;
+  if(ev & TICKIT_EV_RESIZE) {
+    TickitResizeEventInfo *info = _info;
+    tickit_window_resize(ROOT_AS_WINDOW(root), info->lines, info->cols);
+  }
+
+  if(ev & TICKIT_EV_KEY)
+    _handle_key(ROOT_AS_WINDOW(root), (TickitKeyEventInfo *)_info);
+
+  if(ev & TICKIT_EV_MOUSE)
+    _handle_mouse(ROOT_AS_WINDOW(root), (TickitMouseEventInfo *)_info);
+
+  return 1;
+}
+
+static void init_window(TickitWindow *win, TickitWindow *parent, int top, int left, int lines, int cols)
+{
+  win->parent = parent;
+  win->first_child = NULL;
+  win->next = NULL;
+  win->focused_child = NULL;
+  win->pen = tickit_pen_new();
+  win->rect.top = top;
+  win->rect.left = left;
+  win->rect.lines = lines;
+  win->rect.cols = cols;
+  win->cursor.line = 0;
+  win->cursor.col = 0;
+  win->cursor.shape = TICKIT_TERM_CURSORSHAPE_BLOCK;
+  win->cursor.visible = true;
+  win->is_visible = true;
+  win->is_focused = false;
+  win->steal_input = false;
+  win->focus_child_notify = false;
+
+  win->hooks = NULL;
 }
 
 static TickitWindow* new_window(TickitWindow *parent, int top, int left, int lines, int cols)
 {
-  TickitWindow *window = malloc(sizeof(TickitWindow));
-  if(!window)
+  TickitWindow *win = malloc(sizeof(TickitWindow));
+  if(!win)
     return NULL;
 
-  init_window(window, parent, top, left, lines, cols);
+  init_window(win, parent, top, left, lines, cols);
 
-  return window;
+  return win;
 }
 
 TickitWindow* tickit_window_new_root(TickitTerm *term)
@@ -142,12 +148,16 @@ TickitWindow* tickit_window_new_root(TickitTerm *term)
     tickit_window_destroy(ROOT_AS_WINDOW(root));
     return NULL;
   }
+
+  root->event_id = tickit_term_bind_event(term, TICKIT_EV_RESIZE|TICKIT_EV_KEY|TICKIT_EV_MOUSE,
+      &on_term, root);
+
   return ROOT_AS_WINDOW(root);
 }
 
-static TickitRootWindow *_get_root(TickitWindow *window)
+static TickitRootWindow *_get_root(const TickitWindow *win)
 {
-  TickitWindow *root = window;
+  const TickitWindow *root = win;
   while(root->parent) {
     root = root->parent;
   }
@@ -156,24 +166,24 @@ static TickitRootWindow *_get_root(TickitWindow *window)
 
 TickitWindow *tickit_window_new_subwindow(TickitWindow *parent, int top, int left, int lines, int cols)
 {
-  TickitWindow *window = new_window(parent, top, left, lines, cols);
-  _request_hierarchy_change(TICKIT_HIERARCHY_INSERT_LAST, window, TICKIT_DEFER);
-  return window;
+  TickitWindow *win = new_window(parent, top, left, lines, cols);
+  _request_hierarchy_change(TICKIT_HIERARCHY_INSERT_LAST, win);
+  return win;
 }
 
 TickitWindow *tickit_window_new_hidden_subwindow(TickitWindow *parent, int top, int left, int lines, int cols)
 {
-  TickitWindow *window = new_window(parent, top, left, lines, cols);
-  _request_hierarchy_change(TICKIT_HIERARCHY_INSERT_LAST, window, TICKIT_DEFER);
-  window->is_visible = false;
-  return window;
+  TickitWindow *win = new_window(parent, top, left, lines, cols);
+  _request_hierarchy_change(TICKIT_HIERARCHY_INSERT_LAST, win);
+  win->is_visible = false;
+  return win;
 }
 
 TickitWindow *tickit_window_new_float(TickitWindow *parent, int top, int left, int lines, int cols)
 {
-  TickitWindow *window = new_window(parent, top, left, lines, cols);
-  _request_hierarchy_change(TICKIT_HIERARCHY_INSERT_FIRST, window, TICKIT_DEFER);
-  return window;
+  TickitWindow *win = new_window(parent, top, left, lines, cols);
+  _request_hierarchy_change(TICKIT_HIERARCHY_INSERT_FIRST, win);
+  return win;
 }
 
 TickitWindow *tickit_window_new_popup(TickitWindow *parent, int top, int left, int lines, int cols)
@@ -184,103 +194,109 @@ TickitWindow *tickit_window_new_popup(TickitWindow *parent, int top, int left, i
     left += root->rect.left;
     root = root->parent;
   }
-  TickitWindow *window = new_window(root, top, left, lines, cols);
-  _request_hierarchy_change(TICKIT_HIERARCHY_INSERT_FIRST, window, TICKIT_DEFER);
-  window->steal_input = true;
-  return window;
+  TickitWindow *win = new_window(root, top, left, lines, cols);
+  _request_hierarchy_change(TICKIT_HIERARCHY_INSERT_FIRST, win);
+  win->steal_input = true;
+  return win;
 }
 
-void tickit_window_destroy(TickitWindow *window)
+TickitWindow *tickit_window_parent(const TickitWindow *win)
 {
-  window->pen = NULL;
+  return win->parent;
+}
 
-  window->on_expose = NULL;
-  window->on_expose_data = NULL;
-  window->on_focus = NULL;
-  window->on_focus_data = NULL;
-  window->on_geometry_changed = NULL;
-  window->on_geometry_changed_data = NULL;
+TickitWindow *tickit_window_root(const TickitWindow *win)
+{
+  return ROOT_AS_WINDOW(_get_root(win));
+}
 
-  TickitWindow *child = window->children;
-  while(child) {
-   tickit_window_destroy(child);
-   child = window->children;
-  }
+void tickit_window_destroy(TickitWindow *win)
+{
+  tickit_hooklist_unbind_and_destroy(win->hooks, win);
 
-  _purge_hierarchy_changes(window);
+  if(win->pen)
+    tickit_pen_destroy(win->pen);
 
-  if(window->parent) {
-    _request_hierarchy_change(TICKIT_HIERARCHY_REMOVE, window, TICKIT_IMMEDIATE);
-  }
+  for(TickitWindow *child = win->first_child; child; child = child->next)
+    tickit_window_destroy(child);
+
+  _purge_hierarchy_changes(win);
+
+  if(win->parent)
+    _do_hierarchy_change(TICKIT_HIERARCHY_REMOVE, win->parent, win);
 
   /* Root cleanup */
-  if(!window->parent) {
-    TickitRootWindow *root = WINDOW_AS_ROOT(window);
+  if(!win->parent) {
+    TickitRootWindow *root = WINDOW_AS_ROOT(win);
     if(root->damage) {
       tickit_rectset_destroy(root->damage);
     }
+
+    tickit_term_unbind_event_id(root->term, root->event_id);
   }
-  free(window);
+
+  free(win);
 }
 
-void tickit_window_raise(TickitWindow *window)
+void tickit_window_raise(TickitWindow *win)
 {
-  _request_hierarchy_change(TICKIT_HIERARCHY_RAISE, window, TICKIT_DEFER);
+  _request_hierarchy_change(TICKIT_HIERARCHY_RAISE, win);
 }
 
-void tickit_window_raise_to_front(TickitWindow *window)
+void tickit_window_raise_to_front(TickitWindow *win)
 {
-  _request_hierarchy_change(TICKIT_HIERARCHY_RAISE_FRONT, window, TICKIT_DEFER);
+  _request_hierarchy_change(TICKIT_HIERARCHY_RAISE_FRONT, win);
 }
 
-void tickit_window_lower(TickitWindow *window)
+void tickit_window_lower(TickitWindow *win)
 {
-  _request_hierarchy_change(TICKIT_HIERARCHY_LOWER, window, TICKIT_DEFER);
+  _request_hierarchy_change(TICKIT_HIERARCHY_LOWER, win);
 }
 
-void tickit_window_lower_to_back(TickitWindow *window)
+void tickit_window_lower_to_back(TickitWindow *win)
 {
-  _request_hierarchy_change(TICKIT_HIERARCHY_LOWER_BACK, window, TICKIT_DEFER);
+  _request_hierarchy_change(TICKIT_HIERARCHY_LOWER_BACK, win);
 }
 
-void tickit_window_show(TickitWindow *window)
+void tickit_window_show(TickitWindow *win)
 {
-  window->is_visible = true;
-  if(window->parent) {
-    if(!window->parent && (window->focused_child || window->is_focused)) {
-      window->focused_child = window;
+  win->is_visible = true;
+  if(win->parent) {
+    if(!win->parent->focused_child &&
+       (win->focused_child || win->is_focused)) {
+      win->parent->focused_child = win;
     }
   }
-  tickit_window_expose(window, NULL);
+  tickit_window_expose(win, NULL);
 }
 
-void tickit_window_hide(TickitWindow *window)
+void tickit_window_hide(TickitWindow *win)
 {
-  window->is_visible = false;
+  win->is_visible = false;
 
-  if(window->parent) {
-    TickitWindow *parent = window->parent;
-    if(parent->focused_child && (parent->focused_child == window)) {
+  if(win->parent) {
+    TickitWindow *parent = win->parent;
+    if(parent->focused_child && (parent->focused_child == win)) {
       parent->focused_child = NULL;
     }
-    tickit_window_expose(parent, &window->rect);
+    tickit_window_expose(parent, &win->rect);
   }
 }
 
-bool tickit_window_is_visible(TickitWindow *window)
+bool tickit_window_is_visible(TickitWindow *win)
 {
-  return window->is_visible;
+  return win->is_visible;
 }
 
-int tickit_window_top(const TickitWindow *window)
+int tickit_window_top(const TickitWindow *win)
 {
-  return window->rect.top;
+  return win->rect.top;
 }
 
-int tickit_window_abs_top(const TickitWindow *window)
+int tickit_window_abs_top(const TickitWindow *win)
 {
-  int top = window->rect.top;
-  TickitWindow* parent = window->parent;
+  int top = win->rect.top;
+  TickitWindow* parent = win->parent;
   while(parent) {
     top += parent->rect.top;
     parent = parent->parent;
@@ -288,15 +304,15 @@ int tickit_window_abs_top(const TickitWindow *window)
   return top;
 }
 
-int tickit_window_left(const TickitWindow *window)
+int tickit_window_left(const TickitWindow *win)
 {
-  return window->rect.left;
+  return win->rect.left;
 }
 
-int tickit_window_abs_left(const TickitWindow *window)
+int tickit_window_abs_left(const TickitWindow *win)
 {
-  int left = window->rect.left;
-  TickitWindow* parent = window->parent;
+  int left = win->rect.left;
+  TickitWindow* parent = win->parent;
   while(parent) {
     left += parent->rect.left;
     parent = parent->parent;
@@ -304,89 +320,94 @@ int tickit_window_abs_left(const TickitWindow *window)
   return left;
 }
 
-int tickit_window_lines(const TickitWindow *window)
+int tickit_window_lines(const TickitWindow *win)
 {
-  return window->rect.lines;
+  return win->rect.lines;
 }
 
-int tickit_window_cols(const TickitWindow *window)
+int tickit_window_cols(const TickitWindow *win)
 {
-  return window->rect.cols;
+  return win->rect.cols;
 }
 
-void tickit_window_resize(TickitWindow *window, int lines, int cols)
+int tickit_window_bottom(const TickitWindow *win)
 {
-  tickit_window_set_geometry(window, window->rect.top, window->rect.left, lines, cols);
+  return win->rect.top + win->rect.lines;
 }
 
-void tickit_window_reposition(TickitWindow *window, int top, int left)
+int tickit_window_right(const TickitWindow *win)
 {
-  tickit_window_set_geometry(window, top, left, window->rect.lines, window->rect.cols);
-  if(window->is_focused) {
-    _request_restore(_get_root(window));
-  }
+  return win->rect.left + win->rect.cols;
 }
 
-void tickit_window_set_geometry(TickitWindow *window, int top, int left, int lines, int cols)
+void tickit_window_resize(TickitWindow *win, int lines, int cols)
 {
-  if((window->rect.top != top) ||
-     (window->rect.left != left) ||
-     (window->rect.lines != lines) ||
-     (window->rect.cols != cols))
+  tickit_window_set_geometry(win, win->rect.top, win->rect.left, lines, cols);
+}
+
+void tickit_window_reposition(TickitWindow *win, int top, int left)
+{
+  tickit_window_set_geometry(win, top, left, win->rect.lines, win->rect.cols);
+
+  if(win->is_focused)
+    _request_restore(_get_root(win));
+}
+
+void tickit_window_set_geometry(TickitWindow *win, int top, int left, int lines, int cols)
+{
+  if((win->rect.top != top) ||
+     (win->rect.left != left) ||
+     (win->rect.lines != lines) ||
+     (win->rect.cols != cols))
   {
-    window->rect.top = top;
-    window->rect.left = left;
-    window->rect.lines = lines;
-    window->rect.cols = cols;
+    win->rect.top = top;
+    win->rect.left = left;
+    win->rect.lines = lines;
+    win->rect.cols = cols;
 
-    if(window->on_geometry_changed) {
-      window->on_geometry_changed(window, window->on_geometry_changed_data);
-    }
+    TickitGeomchangeEventInfo info = {
+      .rect = { .top = top, .left = left, .lines = lines, .cols = cols },
+    };
+    run_events(win, TICKIT_EV_GEOMCHANGE, &info);
   }
 }
 
-void tickit_window_set_on_geometry_changed(TickitWindow *window, TickitWindowGeometryChangedFn *fn, void *data)
+TickitPen *tickit_window_get_pen(TickitWindow *win)
 {
-  window->on_geometry_changed = fn;
-  window->on_geometry_changed_data = data;
+  return win->pen;
 }
 
-void tickit_window_set_pen(TickitWindow *window, TickitPen *pen)
+void tickit_window_set_pen(TickitWindow *win, TickitPen *pen)
 {
   /* TODO: Refcounting the pen would be nice. Until then, we assume we don't own it. */
-  window->pen = pen;
+  win->pen = pen;
 }
 
-void tickit_window_expose(TickitWindow *window, const TickitRect *exposed)
+void tickit_window_expose(TickitWindow *win, const TickitRect *exposed)
 {
+  TickitRect selfrect = { .top = 0, .left = 0, .lines = win->rect.lines, .cols = win->rect.cols };
   TickitRect damaged;
+
   if(exposed) {
-    if(!tickit_rect_intersect(&damaged, &window->rect, exposed)) {
+    if(!tickit_rect_intersect(&damaged, &selfrect, exposed))
       return;
-    }
-  } else {
-    damaged = window->rect;
   }
+  else
+    damaged = selfrect;
 
-  if(!window->is_visible) {
+  if(!win->is_visible)
+    return;
+
+  if(win->parent) {
+    tickit_rect_translate(&damaged, win->rect.top, win->rect.left);
+    tickit_window_expose(win->parent, &damaged);
     return;
   }
 
-  if(window->parent) {
-    tickit_rect_translate(&damaged, window->rect.top, window->rect.left);
-    tickit_window_expose(window->parent, &damaged);
+  /* If we're here, then we're a root win. */
+  TickitRootWindow *root = WINDOW_AS_ROOT(win);
+  if(tickit_rectset_contains(root->damage, &damaged))
     return;
-  }
-
-  /* If we're here, then we're a root window. */
-  TickitRootWindow *root = WINDOW_AS_ROOT(window);
-  if(tickit_rectset_contains(root->damage, &damaged)) {
-    return;
-  }
-
-  #ifdef DEBUG
-  fprintf(stderr, "Damage root %d, %d, %d, %d\n", damaged.top, damaged.left, damaged.lines, damaged.cols);
-  #endif
 
   tickit_rectset_add(root->damage, &damaged);
 
@@ -394,22 +415,14 @@ void tickit_window_expose(TickitWindow *window, const TickitRect *exposed)
   _request_later_processing(root);
 }
 
-void tickit_window_set_on_expose(TickitWindow *window, TickitWindowExposeFn *fn, void *data)
+static void _do_expose(TickitWindow *win, const TickitRect *rect, TickitRenderBuffer *rb)
 {
-  window->on_expose = fn;
-  window->on_expose_data = data;
-}
+  if(win->pen)
+    tickit_renderbuffer_setpen(rb, win->pen);
 
-static void _do_expose(TickitWindow *window, const TickitRect *rect, TickitRenderBuffer *rb)
-{
-  if(window->pen) {
-    tickit_renderbuffer_setpen(rb, window->pen);
-  }
-
-  for(TickitWindow* child = window->children; child; child = child->next) {
-    if(!child->is_visible) {
+  for(TickitWindow* child = win->first_child; child; child = child->next) {
+    if(!child->is_visible)
       continue;
-    }
 
     TickitRect exposed;
     if(tickit_rect_intersect(&exposed, rect, &child->rect)) {
@@ -426,9 +439,11 @@ static void _do_expose(TickitWindow *window, const TickitRect *rect, TickitRende
     tickit_renderbuffer_mask(rb, &child->rect);
   }
 
-  if(window->on_expose) {
-    window->on_expose(window, rect, rb, window->on_expose_data);
-  }
+  TickitExposeEventInfo info = {
+    .rect = *rect,
+    .rb = rb,
+  };
+  run_events(win, TICKIT_EV_EXPOSE, &info);
 }
 
 static void _request_restore(TickitRootWindow *root)
@@ -444,50 +459,51 @@ static void _request_later_processing(TickitRootWindow *root)
 
 static void _do_restore(TickitRootWindow *root)
 {
-  TickitWindow *window = ROOT_AS_WINDOW(root);
-  while(window) {
-    if(!window->focused_child) {
+  TickitWindow *win = ROOT_AS_WINDOW(root);
+
+  while(win) {
+    if(!win->is_visible)
       break;
-    }
-    if(!window->focused_child->is_visible) {
+
+    if(!win->focused_child)
       break;
-    }
-    window = window->focused_child;
+
+    win = win->focused_child;
   }
 
-  if(window && window->is_focused && window->cursor.visible) {
+  if(win && win->is_focused && win->cursor.visible) {
     /* TODO finish the visibility check here. */
     tickit_term_setctl_int(root->term, TICKIT_TERMCTL_CURSORVIS, 1);
-    int cursor_line = window->cursor.line + tickit_window_abs_top(window);
-    int cursor_col = window->cursor.col + tickit_window_abs_left(window);
+    int cursor_line = win->cursor.line + tickit_window_abs_top(win);
+    int cursor_col = win->cursor.col + tickit_window_abs_left(win);
     tickit_term_goto(root->term, cursor_line, cursor_col);
-    tickit_term_setctl_int(root->term, TICKIT_TERMCTL_CURSORSHAPE, window->cursor.shape);
-  } else {
-    tickit_term_setctl_int(root->term, TICKIT_TERMCTL_CURSORVIS, 0);
+    tickit_term_setctl_int(root->term, TICKIT_TERMCTL_CURSORSHAPE, win->cursor.shape);
   }
+  else
+    tickit_term_setctl_int(root->term, TICKIT_TERMCTL_CURSORVIS, 0);
 
   tickit_term_flush(root->term);
 }
 
-void tickit_window_tick(TickitWindow *window)
+void tickit_window_tick(TickitWindow *win)
 {
-  if(window->parent) {
+  if(win->parent)
     // Can't tick non-root.
     return;
-  }
-  TickitRootWindow *root = WINDOW_AS_ROOT(window);
-  if(!root->needs_later_processing) {
+
+  TickitRootWindow *root = WINDOW_AS_ROOT(win);
+  if(!root->needs_later_processing)
     return;
-  }
+
   root->needs_later_processing = false;
 
   if(root->hierarchy_changes) {
     HierarchyChange *req = root->hierarchy_changes;
     while(req) {
-       _do_hierarchy_change(req->change, req->parent, req->window);
-       HierarchyChange *next = req->next;
-       free(req);
-       req = next;
+      _do_hierarchy_change(req->change, req->parent, req->win);
+      HierarchyChange *next = req->next;
+      free(req);
+      req = next;
     }
     root->hierarchy_changes = NULL;
   }
@@ -499,7 +515,7 @@ void tickit_window_tick(TickitWindow *window)
     TickitRenderBuffer *rb = tickit_renderbuffer_new(root_window->rect.lines, root_window->rect.cols);
 
     int damage_count = tickit_rectset_rects(root->damage);
-    TickitRect *rects = alloca(damage_count * sizeof(TickitRect));
+    TickitRect *rects = malloc(damage_count * sizeof(TickitRect));
     tickit_rectset_get_rects(root->damage, rects, damage_count);
 
     tickit_rectset_clear(root->damage);
@@ -511,6 +527,8 @@ void tickit_window_tick(TickitWindow *window)
       _do_expose(root_window, rect, rb);
       tickit_renderbuffer_restore(rb);
     }
+
+    free(rects);
 
     tickit_renderbuffer_flush_to_term(rb, root->term);
     tickit_renderbuffer_destroy(rb);
@@ -524,247 +542,291 @@ void tickit_window_tick(TickitWindow *window)
   }
 }
 
-static void _do_hierarchy_insert_first(TickitWindow *parent, TickitWindow *window)
+static TickitWindow **_find_child(TickitWindow *parent, TickitWindow *win)
 {
-  window->next = parent->children;
-  parent->children = window;
+  TickitWindow **winp = &parent->first_child;
+  while(*winp && *winp != win)
+    winp = &(*winp)->next;
+
+  return winp;
 }
 
-static void _do_hierarchy_insert_last(TickitWindow *parent, TickitWindow *window)
+static void _do_hierarchy_insert_first(TickitWindow *parent, TickitWindow *win)
 {
-  TickitWindow *chain = parent->children;
-  if(!chain) {
-    parent->children = window;
-  } else {
-    while(chain->next != NULL) {
-      chain = chain->next;
-    }
-    chain->next = window;
-  }
+  win->next = parent->first_child;
+  parent->first_child = win;
 }
 
-static void _do_hierarchy_remove(TickitWindow *parent, TickitWindow *window)
+static void _do_hierarchy_insert_last(TickitWindow *parent, TickitWindow *win)
 {
-  if(parent->children == window) {
-    parent->children = window->next;
-  } else {
-    for(TickitWindow *child = parent->children; child; child = child->next) {
-      if(child->next == window) {
-        child->next = window->next;
-        break;
-      }
-    }
-  }
+  TickitWindow **lastp = &parent->first_child;
+  while(*lastp)
+    lastp = &(*lastp)->next;
+
+  *lastp = win;
+  win->next = NULL;
 }
 
-static void _do_hierarchy_raise(TickitWindow *parent, TickitWindow *window)
+static void _do_hierarchy_remove(TickitWindow *parent, TickitWindow *win)
 {
-  /* If not already at the front */
-  if(parent->children != window) {
-    TickitWindow *prev = NULL;
-    for(TickitWindow *curr = parent->children; curr; curr = curr->next) {
-      if(curr->next == window) {
-        /* We have:
-         *  prev -> curr -> window
-         * we want:
-         *  prev -> window -> curr */
-        prev->next = window;
-        curr->next = window->next;
-        window->next = curr;
-        break;
-      }
-      prev = curr;
-    }
-  }
+  TickitWindow **winp = _find_child(parent, win);
+  if(!winp)
+    return;
+
+  *winp = (*winp)->next;
+  win->next = NULL;
 }
 
-static void _do_hierarchy_lower(TickitWindow *parent, TickitWindow *window)
+static void _do_hierarchy_raise(TickitWindow *parent, TickitWindow *win)
 {
-  if(!window->next) {
-    /* Already at the end */
-  } else if(parent->children == window) {
-    /* First in the list and we know it has children after it. */
-    /* A -> B -> C */
-    TickitWindow *successor = window->next;
-    parent->children = window->next; /* B -> C, A -> B */
-    window->next = successor->next; /* B -> C, A -> C */
-    successor->next = window; /* B -> A -> C */
-  } else {
-    for(TickitWindow *child = parent->children; child; child = child->next) {
-      if(child->next == window) {
-        TickitWindow *successor = window->next;
-        child->next = window->next;
-        window->next = successor->next;
-        successor->next = window;
-        break;
-      }
-    }
-  }
+  TickitWindow **prevp = &parent->first_child;
+  if(*prevp == win) // already first
+    return;
+
+  while(*prevp && (*prevp)->next != win)
+    prevp = &(*prevp)->next;
+
+  if(!prevp) // not found
+    return;
+
+  TickitWindow *after  = win->next;
+
+  win->next = *prevp;
+  (*prevp)->next = after;
+  *prevp = win;
 }
 
-static void _do_hierarchy_change(TickitHierarchyChangeType change, TickitWindow *parent, TickitWindow *window)
+static void _do_hierarchy_lower(TickitWindow *parent, TickitWindow *win)
+{
+  TickitWindow **winp = _find_child(parent, win);
+  if(!winp) // not found
+    return;
+
+  TickitWindow *after = win->next;
+  if(!after) // already last
+    return;
+
+  win->next = after->next;
+  *winp = after;
+  after->next = win;
+}
+
+static void _do_hierarchy_change(HierarchyChangeType change, TickitWindow *parent, TickitWindow *win)
 {
   switch(change) {
     case TICKIT_HIERARCHY_INSERT_FIRST:
-      _do_hierarchy_insert_first(parent, window);
+      _do_hierarchy_insert_first(parent, win);
       break;
     case TICKIT_HIERARCHY_INSERT_LAST:
-      _do_hierarchy_insert_last(parent, window);
+      _do_hierarchy_insert_last(parent, win);
       break;
     case TICKIT_HIERARCHY_REMOVE: {
-        _do_hierarchy_remove(parent, window);
-        if(parent->focused_child && parent->focused_child == window) {
+        _do_hierarchy_remove(parent, win);
+        if(parent->focused_child && parent->focused_child == win) {
           parent->focused_child = NULL;
         }
         break;
       }
     case TICKIT_HIERARCHY_RAISE:
-      _do_hierarchy_raise(parent, window);
+      _do_hierarchy_raise(parent, win);
       break;
     case TICKIT_HIERARCHY_RAISE_FRONT:
-      _do_hierarchy_remove(parent, window);
-      _do_hierarchy_insert_first(parent, window);
+      _do_hierarchy_remove(parent, win);
+      _do_hierarchy_insert_first(parent, win);
       break;
     case TICKIT_HIERARCHY_LOWER:
-      _do_hierarchy_lower(parent, window);
+      _do_hierarchy_lower(parent, win);
       break;
     case TICKIT_HIERARCHY_LOWER_BACK:
-      _do_hierarchy_remove(parent, window);
-      _do_hierarchy_insert_last(parent, window);
+      _do_hierarchy_remove(parent, win);
+      _do_hierarchy_insert_last(parent, win);
       break;
   }
+
+  tickit_window_expose(parent, &win->rect);
 }
 
-static void _request_hierarchy_change(TickitHierarchyChangeType change, TickitWindow *window, TickitWhen when)
+static void _request_hierarchy_change(HierarchyChangeType change, TickitWindow *win)
 {
-  if(!window->parent) {
-    /* Can't do anything to the root window */
+  if(!win->parent)
+    /* Can't do anything to the root win */
     return;
-  }
-  switch(when) {
-    case TICKIT_IMMEDIATE: {
-      _do_hierarchy_change(change, window->parent, window);
-      break;
-    }
-    case TICKIT_DEFER: {
-      HierarchyChange *req = malloc(sizeof(HierarchyChange));
-      req->change = change;
-      req->parent = window->parent;
-      req->window = window;
-      req->next = NULL;
-      TickitRootWindow *root = _get_root(window);
-      if(!root->hierarchy_changes) {
-        root->hierarchy_changes = req;
-      } else {
-        HierarchyChange *chain = root->hierarchy_changes;
-        while(chain->next) {
-          chain = chain->next;
-        }
-        chain->next = req;
-      }
-      break;
-    }
-  }
-}
 
-static void _purge_hierarchy_changes(TickitWindow *window)
-{
-  TickitRootWindow *root = _get_root(window);
+  HierarchyChange *req = malloc(sizeof(HierarchyChange));
+  req->change = change;
+  req->parent = win->parent;
+  req->win = win;
+  req->next = NULL;
+  TickitRootWindow *root = _get_root(win);
   if(!root->hierarchy_changes) {
-    return;
+    root->hierarchy_changes = req;
+    _request_later_processing(root);
   }
-  /* First, get rid of anything starting from head */
-  while((root->hierarchy_changes->parent == window) || (root->hierarchy_changes->window == window)) {
-    HierarchyChange *req = root->hierarchy_changes;
-    root->hierarchy_changes = req->next;
-    free(req);
-  }
-  /* Now, iterate through the list removing any other nodes */
-  HierarchyChange *chain = root->hierarchy_changes;
-  /* TODO: Finish */
-}
-
-void tickit_window_cursor_at(TickitWindow *window, int line, int col)
-{
-  window->cursor.line = line;
-  window->cursor.col = col;
-  if(window->is_focused) {
-    _request_restore(_get_root(window));
-  }
-}
-
-void tickit_window_cursor_visible(TickitWindow *window, bool visible)
-{
-  window->cursor.visible = visible;
-  if(window->is_focused) {
-    _request_restore(_get_root(window));
-  }
-}
-
-void tickit_window_cursor_shape(TickitWindow *window, TickitTermCursorShape shape)
-{
-  window->cursor.shape = shape;
-  if(window->is_focused) {
-    _request_restore(_get_root(window));
-  }
-}
-
-static void _focus_gained(TickitWindow *window, TickitWindow *child);
-static void _focus_lost(TickitWindow *window);
-
-void tickit_window_take_focus(TickitWindow *window)
-{
-  _focus_gained(window, NULL);
-}
-
-void tickit_window_focus(TickitWindow *window, int lines, int cols)
-{
-  tickit_window_cursor_at(window, lines, cols);
-  tickit_window_take_focus(window);
-}
-
-static void _focus_gained(TickitWindow *window, TickitWindow *child)
-{
-  if(window->focused_child && child && window->focused_child != child) {
-    _focus_lost(window->focused_child);
-  }
-  if(window->parent) {
-    if(window->is_visible) {
-      _focus_gained(window->parent, window);
+  else {
+    HierarchyChange *chain = root->hierarchy_changes;
+    while(chain->next) {
+      chain = chain->next;
     }
-  } else {
-    _request_restore(_get_root(window));
+    chain->next = req;
   }
+}
+
+static void _purge_hierarchy_changes(TickitWindow *win)
+{
+  TickitRootWindow *root = _get_root(win);
+  HierarchyChange **changep = &root->hierarchy_changes;
+  while(*changep) {
+    HierarchyChange *req = *changep;
+    if(req->parent == win || req->win == win) {
+      *changep = req->next;
+      free(req);
+    }
+    else
+      changep = &req->next;
+  }
+}
+
+void tickit_window_cursor_at(TickitWindow *win, int line, int col)
+{
+  win->cursor.line = line;
+  win->cursor.col = col;
+
+  if(win->is_focused)
+    _request_restore(_get_root(win));
+}
+
+void tickit_window_cursor_visible(TickitWindow *win, bool visible)
+{
+  win->cursor.visible = visible;
+
+  if(win->is_focused)
+    _request_restore(_get_root(win));
+}
+
+void tickit_window_cursor_shape(TickitWindow *win, TickitTermCursorShape shape)
+{
+  win->cursor.shape = shape;
+
+  if(win->is_focused)
+    _request_restore(_get_root(win));
+}
+
+static void _focus_gained(TickitWindow *win, TickitWindow *child);
+static void _focus_lost(TickitWindow *win);
+
+void tickit_window_take_focus(TickitWindow *win)
+{
+  _focus_gained(win, NULL);
+}
+
+static void _focus_gained(TickitWindow *win, TickitWindow *child)
+{
+  if(win->focused_child && child && win->focused_child != child)
+    _focus_lost(win->focused_child);
+
+  if(win->parent) {
+    if(win->is_visible)
+      _focus_gained(win->parent, win);
+  }
+  else
+    _request_restore(_get_root(win));
+
   if(!child) {
-    window->is_focused = true;
-    if(window->on_focus) {
-      window->on_focus(window, true, NULL, window->on_focus_data);
-    }
-  } else if(window->focus_child_notify) {
-    if(window->on_focus) {
-      window->on_focus(window, true, child, window->on_focus_data);
+    win->is_focused = true;
+
+    TickitFocusEventInfo info = { .type = TICKIT_FOCUSEV_IN, .win = win };
+    run_events(win, TICKIT_EV_FOCUS, &info);
+  }
+  else if(win->focus_child_notify) {
+    TickitFocusEventInfo info = { .type = TICKIT_FOCUSEV_IN, .win = child };
+    run_events(win, TICKIT_EV_FOCUS, &info);
+  }
+
+  win->focused_child = child;
+}
+
+static void _focus_lost(TickitWindow *win)
+{
+  if(win->focused_child) {
+    _focus_lost(win->focused_child);
+
+    if(win->focus_child_notify) {
+      TickitFocusEventInfo info = { .type = TICKIT_FOCUSEV_OUT, .win = win->focused_child };
+      run_events(win, TICKIT_EV_FOCUS, &info);
     }
   }
-  window->focused_child = child;
-}
 
-static void _focus_lost(TickitWindow *window)
-{
-  if(window->focused_child) {
-   _focus_lost(window->focused_child);
-   if(window->on_focus && window->focus_child_notify) {
-     window->on_focus(window, false, window->focused_child, window->on_focus_data);
-   }
+  if(win->is_focused) {
+    win->is_focused = false;
+    TickitFocusEventInfo info = { .type = TICKIT_FOCUSEV_OUT, .win = win };
+    run_events(win, TICKIT_EV_FOCUS, &info);
   }
 }
 
-bool tickit_window_is_focused(TickitWindow *window)
+bool tickit_window_is_focused(TickitWindow *win)
 {
-  return window->is_focused;
+  return win->is_focused;
 }
 
-void tickit_window_set_on_focus(TickitWindow *window, TickitWindowFocusFn *fn, void *data)
+void tickit_window_set_focus_child_notify(TickitWindow *win, bool notify)
 {
-  window->on_focus = fn;
-  window->on_focus_data = data;
+  win->focus_child_notify = notify;
+}
+
+static int _handle_key(TickitWindow *win, TickitKeyEventInfo *info)
+{
+  if(!win->is_visible)
+    return 0;
+
+  if(win->first_child && win->first_child->steal_input)
+    if(_handle_key(win->first_child, info))
+      return 1;
+
+  if(win->focused_child)
+    if(_handle_key(win->focused_child, info))
+      return 1;
+
+  if(run_events_whilefalse(win, TICKIT_EV_KEY, info))
+    return 1;
+
+  // Last-ditch attempt to spread it around other children
+  for(TickitWindow *child = win->first_child; child; child = child->next) {
+    if(child == win->focused_child)
+      continue;
+
+    if(_handle_key(child, info))
+      return 1;
+  }
+
+  return 0;
+}
+
+static int _handle_mouse(TickitWindow *win, TickitMouseEventInfo *info)
+{
+  if(!win->is_visible)
+    return 0;
+
+  for(TickitWindow *child = win->first_child; child; child = child->next) {
+    int child_line = info->line - child->rect.top;
+    int child_col  = info->col  - child->rect.left;
+
+    if(!child->steal_input) {
+      if(child_line < 0 || child_line >= child->rect.lines)
+        continue;
+      if(child_col < 0 || child_col >= child->rect.cols)
+        continue;
+    }
+
+    TickitMouseEventInfo childinfo = *info;
+    childinfo.line = child_line;
+    childinfo.col  = child_col;
+
+    if(_handle_mouse(child, &childinfo))
+      return 1;
+  }
+
+  if(run_events_whilefalse(win, TICKIT_EV_MOUSE, info))
+    return 1;
+
+  return 0;
 }

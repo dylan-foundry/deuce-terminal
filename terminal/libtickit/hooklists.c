@@ -10,11 +10,23 @@ struct TickitEventHook {
   int                     id;
 };
 
-void tickit_hooklist_run_event(struct TickitEventHook *hooks, void *owner, TickitEventType ev, TickitEvent *args)
+void tickit_hooklist_run_event(struct TickitEventHook *hooks, void *owner, TickitEventType ev, void *info)
 {
   for(struct TickitEventHook *hook = hooks; hook; hook = hook->next)
     if(hook->ev & ev)
-      (*hook->fn)(owner, ev, args, hook->data);
+      (*hook->fn)(owner, ev, info, hook->data);
+}
+
+int tickit_hooklist_run_event_whilefalse(struct TickitEventHook *hooks, void *owner, TickitEventType ev, void *info)
+{
+  for(struct TickitEventHook *hook = hooks; hook; hook = hook->next)
+    if(hook->ev & ev) {
+      int ret = (*hook->fn)(owner, ev, info, hook->data);
+      if(ret)
+        return ret;
+    }
+
+  return 0;
 }
 
 int tickit_hooklist_bind_event(struct TickitEventHook **hooklist, void *owner, TickitEventType ev, TickitEventFn *fn, void *data)

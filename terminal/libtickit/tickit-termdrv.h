@@ -22,13 +22,13 @@ typedef struct {
   void (*start)(TickitTermDriver *ttd); /* optional */
   bool (*started)(TickitTermDriver *ttd); /* optional */
   void (*stop)(TickitTermDriver *ttd); /* optional */
-  void (*print)(TickitTermDriver *ttd, const char *str, size_t len);
+  bool (*print)(TickitTermDriver *ttd, const char *str, size_t len);
   bool (*goto_abs)(TickitTermDriver *ttd, int line, int col);
-  void (*move_rel)(TickitTermDriver *ttd, int downward, int rightward);
+  bool (*move_rel)(TickitTermDriver *ttd, int downward, int rightward);
   bool (*scrollrect)(TickitTermDriver *ttd, const TickitRect *rect, int downward, int rightward);
-  void (*erasech)(TickitTermDriver *ttd, int count, TickitMaybeBool moveend);
-  void (*clear)(TickitTermDriver *ttd);
-  void (*chpen)(TickitTermDriver *ttd, const TickitPen *delta, const TickitPen *final);
+  bool (*erasech)(TickitTermDriver *ttd, int count, TickitMaybeBool moveend);
+  bool (*clear)(TickitTermDriver *ttd);
+  bool (*chpen)(TickitTermDriver *ttd, const TickitPen *delta, const TickitPen *final);
   bool (*getctl_int)(TickitTermDriver *ttd, TickitTermCtl ctl, int *value);
   bool (*setctl_int)(TickitTermDriver *ttd, TickitTermCtl ctl, int value);
   bool (*setctl_str)(TickitTermDriver *ttd, TickitTermCtl ctl, const char *value);
@@ -44,6 +44,9 @@ void *tickit_termdrv_get_tmpbuffer(TickitTermDriver *ttd, size_t len);
 void tickit_termdrv_write_str(TickitTermDriver *ttd, const char *str, size_t len);
 void tickit_termdrv_write_strf(TickitTermDriver *ttd, const char *fmt, ...);
 TickitPen *tickit_termdrv_current_pen(TickitTermDriver *ttd);
+
+void tickit_termdrv_send_key(TickitTermDriver *ttd, TickitKeyEventInfo *args);
+void tickit_termdrv_send_mouse(TickitTermDriver *ttd, TickitMouseEventInfo *args);
 
 /*
  * Function to construct a new TickitTerm directly from a TickitTermDriver
