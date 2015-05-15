@@ -221,8 +221,9 @@ define sealed method set-caret-position
     (window :: <deuce-terminal-window>, x :: <integer>, y :: <integer>)
  => ()
   format-out("DEUCE: set-caret-position %=, %=\n", x, y);
-  tickit-window-cursor-at(widget-window(window), y, x);
-  tickit-window-take-focus(widget-window(window));
+  let win :: <TickitWindow*> = window.widget-window;
+  tickit-window-cursor-at(win, y, x);
+  tickit-window-take-focus(win);
 end method set-caret-position;
 
 define sealed method caret-size
