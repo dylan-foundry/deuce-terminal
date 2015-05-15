@@ -14,6 +14,7 @@ define interface
       "tickit.h",
       "tickit-window.h"
     },
+    inline-functions: inline,
     exclude: {
       "tickit_pen_new_attrs",
       "tickit_renderbuffer_get_cell_linemask",
