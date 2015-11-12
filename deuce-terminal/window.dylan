@@ -11,16 +11,24 @@ end class <deuce-terminal-window>;
 define method initialize (window :: <deuce-terminal-window>, #key)
  => ()
   next-method();
+
   let root = tickit-window-new-root(*tickit-term*);
   widget-window(window) := root;
   let (window-width, window-height) = window-size(window);
   let status-bar-origin = window-height;
+
   read-only-label(window) := make(<label>, text: "???");
-  let rolw = tickit-window-new-subwindow(root, status-bar-origin, window-width - 3, 1, 3);
+  let rect = make(<TickitRect*>);
+  tickit-rect-init-sized(rect, status-bar-origin, window-width - 3, 1, 3);
+  let rolw = tickit-window-new(root, rect, 0);
   widget-window(read-only-label(window)) := rolw;
-  let bnlw = tickit-window-new-subwindow(root, status-bar-origin, 0, 1, 50);
+
   buffer-name-label(window) := make(<label>, text: "No buffer loaded.");
+  let rect = make(<TickitRect*>);
+  tickit-rect-init-sized(rect, status-bar-origin, 0, 1, 50);
+  let bnlw = tickit-window-new(root, rect, 0);
   widget-window(buffer-name-label(window)) := bnlw;
+
   backing-store(window) := tickit-renderbuffer-new(window-height, window-width);
 end method initialize;
 
@@ -84,8 +92,8 @@ define sealed method window-viewport-size
     (window :: <deuce-terminal-window>)
  => (width :: <integer>, height :: <integer>)
   let w = widget-window(window);
-  let height = tickit-window-lines(w);
-  let width = tickit-window-cols(w);
+  let height = terminal-window-lines(w);
+  let width = terminal-window-cols(w);
   format-out("DEUCE: window-viewport-size => %d %d\n", height - 2, width);
   // Subtract 2 from height for status bar and message area.
   values(width, height - 2)
@@ -136,7 +144,7 @@ define sealed method draw-string
      #key start: _start, end: _end, color, font, align-x, align-y)
  => ()
   format-out("DEUCE: draw-string \"%s\" @ %=, %=\n", string, line, col);
-  tickit-renderbuffer-text-at(backing-store(window), line, col, string, $default-pen);
+  tickit-renderbuffer-text-at(backing-store(window), line, col, string);
   queue-repaint(window, $everywhere);
 end method draw-string;
 
@@ -178,7 +186,7 @@ define sealed method clear-area
   format-out("DEUCE: clear-area %=, %= -> %=, %=\n", left, top, right, bottom);
   let rect = make(<TickitRect*>);
   tickit-rect-init-sized(rect, top, left, bottom, right);
-  tickit-renderbuffer-eraserect(backing-store(window), rect, $default-pen);
+  tickit-renderbuffer-eraserect(backing-store(window), rect);
   queue-repaint(window, rect);
 end method clear-area;
 
@@ -222,7 +230,7 @@ define sealed method set-caret-position
  => ()
   format-out("DEUCE: set-caret-position %=, %=\n", x, y);
   let win :: <TickitWindow*> = window.widget-window;
-  tickit-window-cursor-at(win, y, x);
+  tickit-window-set-cursor-position(win, y, x);
   tickit-window-take-focus(win);
 end method set-caret-position;
 
@@ -243,14 +251,14 @@ define sealed method show-caret
     (window :: <deuce-terminal-window>, #key tooltip?)
  => ()
   format-out("DEUCE: show-caret tooltip? %=\n", tooltip?);
-  tickit-window-cursor-visible(widget-window(window), #t);
+  tickit-window-set-cursor-visible(widget-window(window), #t);
 end method show-caret;
 
 define sealed method hide-caret
     (window :: <deuce-terminal-window>, #key tooltip?)
  => ()
   format-out("DEUCE: hide-caret tooltip? %=\n", tooltip?);
-  tickit-window-cursor-visible(widget-window(window), #f);
+  tickit-window-set-cursor-visible(widget-window(window), #f);
 end method hide-caret;
 
 define sealed method font-metrics

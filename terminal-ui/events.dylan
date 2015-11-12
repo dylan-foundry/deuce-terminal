@@ -63,8 +63,8 @@ define function terminal-ui-dispatch-events (widget :: <widget>)
                            handle-mouse-event-callback,
                            null-pointer(<C-void*>));
   while (~*quit-signaled?*)
-    tickit-window-tick(widget-window(widget));
+    tickit-window-flush(widget-window(widget));
     tickit-term-input-wait(*tickit-term*, 5);
-    tickit-window-tick(widget-window(widget));
+    tickit-window-flush(widget-window(widget));
   end;
 end function;

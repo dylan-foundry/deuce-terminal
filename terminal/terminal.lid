@@ -8,6 +8,7 @@ c-source-files: helper.c
        libtermkey/driver-csi.c
        libtermkey/driver-ti.c
        libtermkey/termkey.c
+       libtickit/debug.c
        libtickit/hooklists.c
        libtickit/mockterm.c
        libtickit/pen.c
@@ -25,7 +26,6 @@ c-header-files: libtermkey/termkey-internal.h
        libtickit/termdriver.h
        libtickit/tickit-mockterm.h
        libtickit/tickit-termdrv.h
-       libtickit/tickit-window.h
        libtickit/tickit.h
        libtickit/unicode.h
        libtickit/linechars.inc

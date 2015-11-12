@@ -12,7 +12,7 @@ extern "C" {
  */
 
 #include "tickit.h"
-#include "termkey.h"
+#include <termkey.h>
 
 typedef struct TickitTermDriver TickitTermDriver;
 

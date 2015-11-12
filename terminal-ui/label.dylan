@@ -21,5 +21,6 @@ define method handle-repaint
     (label :: <label>, renderbuffer :: <TickitRenderBuffer*>,
      rect :: <TickitRect*>)
  => ()
-  tickit-renderbuffer-text-at(renderbuffer, 0, 0, label-text(label), label-pen(label));
+  tickit-renderbuffer-setpen(renderbuffer, label-pen(label));
+  tickit-renderbuffer-text-at(renderbuffer, 0, 0, label-text(label));
 end method handle-repaint;

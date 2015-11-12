@@ -14,6 +14,18 @@ define c-function terminal-stdout-fileno
   c-name: "terminal_get_stdout_fileno";
 end;
 
+define c-function terminal-window-cols
+  input parameter window :: <TickitWindow*>;
+  result cols :: <C-int>;
+  c-name: "terminal_window_cols";
+end;
+
+define c-function terminal-window-lines
+  input parameter window :: <TickitWindow*>;
+  result lines :: <C-int>;
+  c-name: "terminal_window_lines";
+end;
+
 define function terminal-init ()
   *tickit-term* := tickit-term-new();
   assert(~null-pointer?(*tickit-term*));
