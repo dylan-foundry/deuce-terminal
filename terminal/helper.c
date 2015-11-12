@@ -1,15 +1,4 @@
-#include <stdio.h>
 #include "tickit.h"
-
-int terminal_get_stdin_fileno(void)
-{
-  return fileno(stdin);
-}
-
-int terminal_get_stdout_fileno(void)
-{
-  return fileno(stdout);
-}
 
 int terminal_window_lines(TickitWindow *window)
 {
